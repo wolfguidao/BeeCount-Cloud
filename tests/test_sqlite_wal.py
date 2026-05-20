@@ -13,10 +13,24 @@ import pytest
 from src.database import SessionLocal, engine
 
 
+def _is_file_sqlite() -> bool:
+    """只在 file-backed sqlite 跑 — in-memory db 的 journal_mode 永远是 'memory',
+    不可能切 WAL;CI 用 `sqlite:///:memory:` 跑测试,这套断言跑不通。"""
+    url = str(engine.url)
+    if not url.startswith("sqlite"):
+        return False
+    if ":memory:" in url:
+        return False
+    # sqlite:// 没 path 也是 in-memory
+    if url.rstrip("/") in {"sqlite:", "sqlite://"}:
+        return False
+    return True
+
+
 def test_engine_uses_wal_mode():
-    """每个新 connection 必须自动配 WAL + busy_timeout=5000。"""
-    if not str(engine.url).startswith("sqlite"):
-        pytest.skip("only sqlite backend needs WAL")
+    """每个新 file-backed connection 必须自动配 WAL + busy_timeout=5000。"""
+    if not _is_file_sqlite():
+        pytest.skip("only file-backed sqlite needs WAL")
     with engine.connect() as conn:
         assert conn.exec_driver_sql("PRAGMA journal_mode").scalar() == "wal"
         assert conn.exec_driver_sql("PRAGMA busy_timeout").scalar() == 5000
@@ -32,8 +46,8 @@ def test_concurrent_reader_writer_no_lock():
     模拟数据清理 scan(长 SELECT)期间,普通 sync/pull(commit)能正常完成。
     DELETE 模式下这种场景必然会有一方报 locked,WAL 模式下双方都成功。
     """
-    if not str(engine.url).startswith("sqlite"):
-        pytest.skip("only sqlite backend has this lock semantic")
+    if not _is_file_sqlite():
+        pytest.skip("only file-backed sqlite has this lock semantic")
 
     errors: list[Exception] = []
     writer_ok = threading.Event()
