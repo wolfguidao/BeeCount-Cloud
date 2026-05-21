@@ -108,6 +108,21 @@ class Settings(BaseSettings):
     # 默认 true — 生产 / docker 部署千万别关,关了会被中间人篡改流量也不知。
     ai_http_verify_ssl: bool = Field(default=True, alias="AI_HTTP_VERIFY_SSL")
 
+    # /sync/pull enrich 兜底跳过阈值。
+    #
+    # `_enrich_tx_payloads_with_user_ids` 兜底补的是 push.py 修复前写入的老
+    # `sync_changes.payload_json`(缺 createdByUserId / updatedByUserId)。
+    # 新部署的环境从一开始就用修好的 push.py,所有新写的 change 都完整,
+    # enrich 永远 miss 但每页都跑 ~30ms 浪费。
+    #
+    # 设置成已知"修复时间点对应的最大 change_id":
+    #   - 0(默认) → 兼容老行为,对所有 change 都尝试 enrich
+    #   - > 0 → 只对 change_id <= 阈值的行跑 enrich,后面的直接跳过
+    # 排查:`SELECT MAX(change_id) FROM sync_changes WHERE created_at < '修复部署时间'`
+    sync_enrich_max_change_id: int = Field(
+        default=0, alias="SYNC_ENRICH_MAX_CHANGE_ID"
+    )
+
     @property
     def cors_origin_list(self) -> list[str]:
         return [x.strip() for x in self.cors_origins.split(",") if x.strip()]

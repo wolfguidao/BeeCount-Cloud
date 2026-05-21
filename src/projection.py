@@ -15,7 +15,7 @@ import logging
 from pathlib import Path
 from typing import Any, Iterable
 
-from sqlalchemy import delete, func, or_, select
+from sqlalchemy import delete, func, or_, select, update
 from sqlalchemy.dialects.sqlite import insert as sqlite_insert
 from sqlalchemy.engine import Engine
 from sqlalchemy.orm import Session
@@ -528,49 +528,49 @@ def rename_cascade_tag(
     old_name: str,
     new_name: str,
 ) -> None:
-    """Tag rename 走 tags_csv 字符串替换。tag 是 user-global,刷该用户所有 tx 行。
-    用 Python 做字符串替换比纯 SQL 的 REPLACE 更安全(避免 name 是别的 tag 的
-    substring 时误伤)。
+    """Tag rename cascade — 把该用户所有 tx 行的 `tags_csv` 里 `old_name` 替换成
+    `new_name`。tag 是 user-global,影响该用户所有 ledger 的 read_tx_projection。
+
+    **纯 SQL UPDATE 实现**(老 Python loop 在 10 万级 tx 上慢):
+    - 边界保护:在 tags_csv 头尾加 ',' 包围后再 REPLACE,避免 "餐饮" 误伤
+      "餐饮1" 这种 substring 共有的情况(replace ',餐饮,' → ',新名,' 而不是
+      replace '餐饮' → '新名')
+    - 跑一条 UPDATE 覆盖该 user 所有 ledger 所有 tx,ORM 不参与
+
+    边界:
+    - old_name / new_name 含逗号:tags_csv 协议本就不允许 name 含逗号,这里
+      不额外校验,假定 push 层已经拒绝
+    - 空字符串 / 相同 name:直接 return
+    - SQLite + Postgres 都支持 `||` 拼接 / `REPLACE` / `SUBSTR` / `LIKE`
     """
-    from sqlalchemy import select as sql_select
+    from sqlalchemy import func, literal, text
 
     if not old_name or not new_name or old_name == new_name:
         return
-    # 两条查询取并集:
-    #   1) tag_sync_ids_json 精确引用了该 tag sync_id (mobile/web 完整数据)
-    #   2) tags_csv 包含旧名称但没有 tag_sync_ids_json (legacy/不完整数据)
-    like_pat = f'%"{tag_sync_id}"%'
-    rows_by_id = db.scalars(
-        sql_select(ReadTxProjection).where(
+
+    # 临界值:头尾包围 ',' 后做 REPLACE,完成后去掉首尾 ','。
+    # SQL:
+    #   tags_csv = SUBSTR(REPLACE(',' || tags_csv || ',', ',OLD,', ',NEW,'),
+    #                     2,
+    #                     LENGTH(REPLACE(...)) - 2)
+    wrapped = func.concat(literal(","), ReadTxProjection.tags_csv, literal(","))
+    old_token = func.concat(literal(","), literal(old_name), literal(","))
+    new_token = func.concat(literal(","), literal(new_name), literal(","))
+    replaced = func.replace(wrapped, old_token, new_token)
+    trimmed = func.substr(replaced, 2, func.length(replaced) - 2)
+
+    # 只更新真包含 old_name 的行(避免无谓行写)。LIKE 跟上面 wrapped 同款
+    # 边界,精确匹配 ",OLD,"。
+    db.execute(
+        update(ReadTxProjection)
+        .where(
             ReadTxProjection.user_id == user_id,
-            ReadTxProjection.tag_sync_ids_json.like(like_pat),
+            ReadTxProjection.tags_csv.is_not(None),
+            wrapped.like(f"%,{old_name},%"),
         )
-    ).all()
-    # tags_csv 可能是 "旧标签" 或 "A,旧标签,B" 等逗号分隔形式;
-    # 用 LIKE 做粗筛,Python 侧按逗号拆分精确匹配防 substring 误伤。
-    like_name = f"%{old_name}%"
-    rows_by_name = db.scalars(
-        sql_select(ReadTxProjection).where(
-            ReadTxProjection.user_id == user_id,
-            ReadTxProjection.tags_csv.like(like_name),
-            ReadTxProjection.tag_sync_ids_json.is_(None),
-        )
-    ).all()
-    # 去重 (理论上不会重叠,但防御性合并)
-    seen: set[tuple[str, str]] = set()
-    all_rows = []
-    for row in (*rows_by_id, *rows_by_name):
-        key = (row.ledger_id, row.sync_id)
-        if key not in seen:
-            seen.add(key)
-            all_rows.append(row)
-    for row in all_rows:
-        if not row.tags_csv:
-            continue
-        parts = [p.strip() for p in row.tags_csv.split(",") if p.strip()]
-        replaced = [new_name if p == old_name else p for p in parts]
-        if replaced != parts:
-            row.tags_csv = ",".join(replaced)
+        .values(tags_csv=trimmed)
+        .execution_options(synchronize_session=False)
+    )
 
 
 # --------------------------------------------------------------------------- #

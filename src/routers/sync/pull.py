@@ -12,6 +12,7 @@ import time
 
 from sqlalchemy import and_, or_
 
+from ...config import get_settings
 from ._shared import *  # noqa: F401,F403 — 拉取所有 imports / helpers / router / constants
 
 
@@ -20,11 +21,40 @@ from ._shared import *  # noqa: F401,F403 — 拉取所有 imports / helpers / r
 USER_GLOBAL_LEDGER_SENTINEL = "__user_global__"
 
 
+# /sync/pull?types= 接受的 entity_type 白名单。mobile 后续会用来分阶段拉:
+# 阶段 1 拉元数据 `?types=ledger,ledger_snapshot,account,category,tag,budget`
+# (快,N 条几十),UI 立刻渲染骨架;阶段 2 拉 `?types=transaction`(慢,几千)
+# 在后台慢慢填。两阶段共享同一 since cursor — server 各自过滤,client 全部
+# apply 完再 commit cursor。
+#
+# 不传 types = 全拉(向后兼容)。
+_VALID_ENTITY_TYPES = frozenset(
+    {"ledger", "ledger_snapshot", "account", "category", "tag", "budget", "transaction"}
+)
+
+
+def _parse_types_param(types_raw: str | None) -> set[str] | None:
+    """解析 `?types=a,b,c`,返回过滤集合;None 表示不过滤。
+
+    - unknown type 静默丢弃(防御性,避免 client typo 导致整个 pull 报 400)
+    - 空字符串 / 只有逗号 → None(等同不传)
+    """
+    if not types_raw:
+        return None
+    items = {t.strip().lower() for t in types_raw.split(",")}
+    items = {t for t in items if t in _VALID_ENTITY_TYPES}
+    return items or None
+
+
 @router.get("/pull", response_model=SyncPullResponse)
 def pull_changes(
     since: int = Query(default=0, ge=0),
     device_id: str | None = Query(default=None),
     limit: int = Query(default=1000, ge=1, le=5000),
+    types: str | None = Query(
+        default=None,
+        description="逗号分隔的 entity_type 过滤,不传 = 全拉。例如 `transaction` 或 `ledger,account,category,tag,budget`。",
+    ),
     _scopes: set[str] = Depends(require_any_scopes(SCOPE_APP_WRITE, SCOPE_WEB_READ)),
     current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db),
@@ -32,6 +62,7 @@ def pull_changes(
     metrics.inc("beecount_sync_pull_requests_total")
     request_start = time.perf_counter()
     enrich_count = 0  # _enrich_tx_payloads_with_user_ids 实际兜底补的 tx 数,日志用
+    types_filter = _parse_types_param(types)
     heartbeat_updated = False
     if device_id:
         device = db.scalar(
@@ -81,6 +112,8 @@ def pull_changes(
     )
     if device_id:
         query = query.where(SyncChange.updated_by_device_id != device_id)
+    if types_filter is not None:
+        query = query.where(SyncChange.entity_type.in_(types_filter))
 
     rows = db.execute(query).all()
     has_more = len(rows) > limit
@@ -155,12 +188,14 @@ def pull_changes(
     # structured log:运维 grep `sync.pull.return` 看 user/device/慢请求等。
     # admin 日志面板对 `event=sync.pull.return AND elapsed_ms > 500` 做快速 filter。
     # 始终输出(不论 changes 是否为空),便于追踪空 pull 也能看到。
+    types_label = ",".join(sorted(types_filter)) if types_filter else "*"
     logger.info(
-        "sync.pull.return user=%s device=%s since=%d returned=%d hasMore=%s "
+        "sync.pull.return user=%s device=%s since=%d types=%s returned=%d hasMore=%s "
         "elapsed_ms=%d accessible_ledgers=%d enrich_count=%d",
         current_user.id,
         device_id,
         since,
+        types_label,
         len(changes),
         has_more,
         elapsed_ms,
@@ -189,16 +224,25 @@ def _enrich_tx_payloads_with_user_ids(
     push.py 已在写时注入这俩字段;此 helper 是兜底,覆盖 push 修复前留下的
     历史 SyncChange.payload_json 缺失的情况。
 
+    **优化**:对 `change_id > settings.sync_enrich_max_change_id` 的行直接跳过
+    兜底 — 那些是新数据,push.py 修好后写的肯定完整。0(默认)= 不跳过,
+    跟原行为兼容。新部署或迁移完成后把这个值设到部署点的 max(change_id),
+    一次性把每页 ~30ms 的兜底开销省掉。
+
     防御性 copy:不修改原 ORM 对象的 payload_json 引用(避免 MutableDict
     切换或意外 db.commit 把 enrichment 写回 DB)。返回 (rows_list, enriched_count)。
     `enriched_count` 给上层日志用,衡量历史脏数据残留规模。
     """
     if not rows:
         return rows, 0
+    enrich_cap = get_settings().sync_enrich_max_change_id
     # 1. 收集 (ledger_id, sync_id, idx) 待补行
     pending: list[tuple[str, str, int]] = []
     for idx, (change, _external_id) in enumerate(rows):
         if change.entity_type != "transaction":
+            continue
+        # 跳过阈值之后的(新数据,push.py 修好后写的已经完整)
+        if enrich_cap > 0 and change.change_id > enrich_cap:
             continue
         payload = change.payload_json
         if not isinstance(payload, dict):

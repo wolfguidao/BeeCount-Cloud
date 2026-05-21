@@ -250,6 +250,102 @@ def test_mobile_tag_rename_cascades_tx_projection():
         app.dependency_overrides.clear()
 
 
+def test_mobile_tag_rename_cascade_does_not_touch_substring_tags():
+    """rename_cascade_tag 用纯 SQL UPDATE,必须用边界逗号防止 substring 误伤。
+
+    场景:同时有两个 tag "餐" 和 "餐饮",一笔 tx 同时引用两者
+    (tags_csv = "餐饮,餐")。rename "餐" → "三餐":
+    - 正确:tags_csv → "餐饮,三餐"(只动 "餐",不动 "餐饮")
+    - 错误(老朴素 REPLACE):"三餐饮,三餐"(把 "餐饮" 也部分替换了)
+    """
+    client, engine, sf = _make_client()
+    try:
+        tok = _register_and_login(client, "sub@t.com", device_id="m1", client_type="app")
+        hdr = {"Authorization": f"Bearer {tok}"}
+        _push(client, hdr, "m1", "lgSub", [
+            {"ledger_id": "lgSub", "entity_type": "tag", "entity_sync_id": "t-meal",
+             "action": "upsert", "updated_at": _iso(),
+             "payload": {"syncId": "t-meal", "name": "餐"}},
+            {"ledger_id": "lgSub", "entity_type": "tag", "entity_sync_id": "t-dining",
+             "action": "upsert", "updated_at": _iso(),
+             "payload": {"syncId": "t-dining", "name": "餐饮"}},
+            {"ledger_id": "lgSub", "entity_type": "transaction", "entity_sync_id": "tx1",
+             "action": "upsert", "updated_at": _iso(),
+             "payload": {"syncId": "tx1", "type": "expense", "amount": 5,
+                         "happenedAt": _iso(),
+                         "tags": "餐饮,餐",
+                         "tagIds": ["t-dining", "t-meal"]}},
+        ])
+        # rename "餐" → "三餐"
+        later = datetime.now(timezone.utc) + timedelta(seconds=2)
+        _push(client, hdr, "m1", "lgSub", [
+            {"ledger_id": "lgSub", "entity_type": "tag", "entity_sync_id": "t-meal",
+             "action": "upsert", "updated_at": _iso(later),
+             "payload": {"syncId": "t-meal", "name": "三餐"}},
+        ])
+        lid = _get_ledger_internal_id(sf, "lgSub")
+        with sf() as db:
+            tx = db.scalar(select(ReadTxProjection).where(
+                ReadTxProjection.ledger_id == lid, ReadTxProjection.sync_id == "tx1"))
+            # "餐饮" 不能被误伤
+            tags = set((tx.tags_csv or "").split(","))
+            assert "餐饮" in tags, f"餐饮 被误伤,got {tx.tags_csv}"
+            assert "三餐" in tags, f"餐 没改成 三餐,got {tx.tags_csv}"
+            assert "餐" not in tags, f"餐 还在,got {tx.tags_csv}"
+    finally:
+        app.dependency_overrides.clear()
+
+
+def test_mobile_tag_rename_cascade_handles_first_and_last_position():
+    """边界:rename 的标签出现在 tags_csv 的首位 / 末位 / 中间,都要正确替换。"""
+    client, engine, sf = _make_client()
+    try:
+        tok = _register_and_login(client, "pos@t.com", device_id="m1", client_type="app")
+        hdr = {"Authorization": f"Bearer {tok}"}
+        _push(client, hdr, "m1", "lgPos", [
+            {"ledger_id": "lgPos", "entity_type": "tag", "entity_sync_id": "tx",
+             "action": "upsert", "updated_at": _iso(),
+             "payload": {"syncId": "tx", "name": "X"}},
+            # tx1: 单 tag = "X"
+            {"ledger_id": "lgPos", "entity_type": "transaction", "entity_sync_id": "tx1",
+             "action": "upsert", "updated_at": _iso(),
+             "payload": {"syncId": "tx1", "type": "expense", "amount": 1,
+                         "happenedAt": _iso(), "tags": "X", "tagIds": ["tx"]}},
+            # tx2: tags="X,B,C" (首位)
+            {"ledger_id": "lgPos", "entity_type": "transaction", "entity_sync_id": "tx2",
+             "action": "upsert", "updated_at": _iso(),
+             "payload": {"syncId": "tx2", "type": "expense", "amount": 1,
+                         "happenedAt": _iso(), "tags": "X,B,C", "tagIds": ["tx"]}},
+            # tx3: tags="A,X,C" (中间)
+            {"ledger_id": "lgPos", "entity_type": "transaction", "entity_sync_id": "tx3",
+             "action": "upsert", "updated_at": _iso(),
+             "payload": {"syncId": "tx3", "type": "expense", "amount": 1,
+                         "happenedAt": _iso(), "tags": "A,X,C", "tagIds": ["tx"]}},
+            # tx4: tags="A,B,X" (末位)
+            {"ledger_id": "lgPos", "entity_type": "transaction", "entity_sync_id": "tx4",
+             "action": "upsert", "updated_at": _iso(),
+             "payload": {"syncId": "tx4", "type": "expense", "amount": 1,
+                         "happenedAt": _iso(), "tags": "A,B,X", "tagIds": ["tx"]}},
+        ])
+        later = datetime.now(timezone.utc) + timedelta(seconds=2)
+        _push(client, hdr, "m1", "lgPos", [
+            {"ledger_id": "lgPos", "entity_type": "tag", "entity_sync_id": "tx",
+             "action": "upsert", "updated_at": _iso(later),
+             "payload": {"syncId": "tx", "name": "Y"}},
+        ])
+        lid = _get_ledger_internal_id(sf, "lgPos")
+        with sf() as db:
+            expected = {"tx1": "Y", "tx2": "Y,B,C", "tx3": "A,Y,C", "tx4": "A,B,Y"}
+            for sync_id, want in expected.items():
+                tx = db.scalar(select(ReadTxProjection).where(
+                    ReadTxProjection.ledger_id == lid,
+                    ReadTxProjection.sync_id == sync_id))
+                assert tx.tags_csv == want, \
+                    f"tx={sync_id} expected {want!r} got {tx.tags_csv!r}"
+    finally:
+        app.dependency_overrides.clear()
+
+
 def test_mobile_tag_rename_cascades_when_transaction_only_has_tag_name():
     """Issue #5 regression: legacy/mobile tx may only carry tags_csv without tagIds.
     Renaming the tag entity must still refresh existing transaction tag names.
