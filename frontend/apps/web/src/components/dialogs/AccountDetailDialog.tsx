@@ -159,13 +159,20 @@ function AccountCardInfo({
   const billingDay = isCreditCard ? account.billing_day : null
   const paymentDueDay = isCreditCard ? account.payment_due_day : null
 
-  // 信用卡已用额度 = 累计支出 - 累计收入(还款)。剩余额度 = limit - used。
+  // 信用卡已用额度 = -balance(余额为负表示欠款),剩余额度 = limit - used。
   // 这是粗略估算 — 没考虑账单周期,只看终身累计。但作为"大致还能刷多少"
   // 的信号已经够用,后续要精确版本应该按 billing_day 分账期算。
+  //
+  // 为什么用 balance 而不是 expense_total - income_total:后者会漏掉"储蓄卡
+  // 转账到信用卡还款"这种 transfer-in 操作 —— 转账既不是 expense 也不是
+  // income,只在 backend 的 balance 计算里被加回去(workspace.py 的
+  // transfer_to bucket)。balance 已经统一包含初始余额 + 全部 income /
+  // expense / transfer-in / transfer-out,跟 mobile 端
+  // `getCreditCardUsedAmount` (balance < 0 ? -balance : 0) 完全一致。
+  // 修复 issue #26:储蓄卡转账到信用卡额度没恢复。
+  const balance = account.balance ?? account.initial_balance ?? 0
   const used =
-    typeof creditLimit === 'number'
-      ? Math.max(0, (account.expense_total ?? 0) - (account.income_total ?? 0))
-      : null
+    typeof creditLimit === 'number' ? Math.max(0, -balance) : null
   const remaining =
     typeof creditLimit === 'number' && used !== null
       ? Math.max(0, creditLimit - used)
