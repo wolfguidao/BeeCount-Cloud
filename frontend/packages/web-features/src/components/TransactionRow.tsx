@@ -45,6 +45,9 @@ type CommonProps = {
   selected?: boolean
   /** 切换选中。event 透传给上层判断 shift / meta 键(范围选 / 增量选)。 */
   onToggleSelect?: (row: ReadTransaction, event: React.MouseEvent) => void
+  /** 跨账本场景(详情弹窗 scope='all')—— 在 meta 行追加账本名 chip,帮用户
+   *  区分同一分类/标签/账户在不同账本里的记录。同账本场景不传,避免噪声。 */
+  showLedger?: boolean
 }
 
 /**
@@ -73,7 +76,8 @@ export function TransactionRow({
   className,
   selectionMode = false,
   selected = false,
-  onToggleSelect
+  onToggleSelect,
+  showLedger = false
 }: CommonProps) {
   const t = useT()
   const attachments = Array.isArray(row.attachments) ? row.attachments : []
@@ -243,6 +247,14 @@ export function TransactionRow({
           <span className="font-mono tabular-nums">{formatDateTime(row.happened_at)}</span>
           {accountText && accountText !== '-' ? (
             <span className="truncate">· {accountText}</span>
+          ) : null}
+          {showLedger && row.ledger_name ? (
+            <span
+              className="inline-flex shrink-0 items-center rounded border border-border/60 bg-muted/30 px-1.5 py-0.5 text-[10px] font-medium text-muted-foreground"
+              title={row.ledger_name}
+            >
+              {row.ledger_name}
+            </span>
           ) : null}
           {row.tags_list && row.tags_list.length > 0
             ? row.tags_list.map((tagName) => (

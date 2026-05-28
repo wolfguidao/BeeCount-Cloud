@@ -20,6 +20,7 @@ import {
   onOpenDetailCategory,
   onOpenDetailTag,
   onOpenDetailTx,
+  type DetailScope,
 } from '../lib/txDialogEvents'
 import { AccountDetailDialog } from './dialogs/AccountDetailDialog'
 import { CategoryDetailDialog } from './dialogs/CategoryDetailDialog'
@@ -56,22 +57,25 @@ export function GlobalEntityDialogs() {
   const [tx, setTx] = useState<WorkspaceTransaction | null>(null)
 
   const [account, setAccount] = useState<WorkspaceAccount | null>(null)
+  const [accountScope, setAccountScope] = useState<DetailScope>('current')
   const [accountTxs, setAccountTxs] = useState<WorkspaceTransaction[]>([])
   const [accountTotal, setAccountTotal] = useState(0)
   const [accountOffset, setAccountOffset] = useState(0)
   const [accountLoading, setAccountLoading] = useState(false)
 
   const [category, setCategory] = useState<WorkspaceCategory | null>(null)
+  const [categoryScope, setCategoryScope] = useState<DetailScope>('current')
   const [categoryTxs, setCategoryTxs] = useState<WorkspaceTransaction[]>([])
   const [categoryTotal, setCategoryTotal] = useState(0)
   const [categoryOffset, setCategoryOffset] = useState(0)
   const [categoryLoading, setCategoryLoading] = useState(false)
-  // Stats 批量数据 — 限定当前账本,不参与分页,只给 KPI/趋势/Top 用。
+  // Stats 批量数据 — 跟 categoryScope 联动:current 限当前账本,all 跨账本。
   const [categoryStatsTxs, setCategoryStatsTxs] = useState<WorkspaceTransaction[]>([])
   const [categoryStatsLoading, setCategoryStatsLoading] = useState(false)
   const [categoryStatsTruncated, setCategoryStatsTruncated] = useState(false)
 
   const [tag, setTag] = useState<WorkspaceTag | null>(null)
+  const [tagScope, setTagScope] = useState<DetailScope>('current')
   const [tagTxs, setTagTxs] = useState<WorkspaceTransaction[]>([])
   const [tagTotal, setTagTotal] = useState(0)
   const [tagOffset, setTagOffset] = useState(0)
@@ -95,11 +99,12 @@ export function GlobalEntityDialogs() {
   }, [token])
 
   const loadAccountTxs = useCallback(
-    async (accountName: string, offset: number) => {
+    async (accountName: string, scope: DetailScope, offset: number) => {
       setAccountLoading(true)
       try {
         const page = await fetchWorkspaceTransactions(token, {
           accountName,
+          ledgerId: scope === 'current' ? activeLedgerId || undefined : undefined,
           limit: DETAIL_PAGE_SIZE,
           offset,
         })
@@ -112,17 +117,18 @@ export function GlobalEntityDialogs() {
         setAccountLoading(false)
       }
     },
-    [token],
+    [token, activeLedgerId],
   )
 
   // 监听 account detail
   useEffect(() => {
-    return onOpenDetailAccount((acc) => {
+    return onOpenDetailAccount((acc, defaultScope) => {
       setAccount(acc)
+      setAccountScope(defaultScope)
       setAccountTxs([])
       setAccountTotal(0)
       setAccountOffset(0)
-      void loadAccountTxs(acc.name, 0)
+      void loadAccountTxs(acc.name, defaultScope, 0)
       // 同时拉一份 tags 字典(如还没拉)
       if (tagsDict.length === 0) {
         void fetchWorkspaceTags(token, { limit: 500 }).then(setTagsDict).catch(() => undefined)
@@ -130,15 +136,25 @@ export function GlobalEntityDialogs() {
     })
   }, [loadAccountTxs, token, tagsDict.length])
 
+  const handleAccountScopeChange = useCallback(
+    (next: DetailScope) => {
+      if (!account || next === accountScope) return
+      setAccountScope(next)
+      setAccountTxs([])
+      setAccountTotal(0)
+      setAccountOffset(0)
+      void loadAccountTxs(account.name, next, 0)
+    },
+    [account, accountScope, loadAccountTxs],
+  )
+
   const loadCategoryTxs = useCallback(
-    async (categorySyncId: string, offset: number) => {
+    async (categorySyncId: string, scope: DetailScope, offset: number) => {
       setCategoryLoading(true)
       try {
-        // 分类详情按"当前账本"过滤 — 跟分类详情弹窗的 KPI / Top 列表口径
-        // 一致。activeLedgerId 缺省时退化为跨账本(空字符串 → 不传)。
         const page = await fetchWorkspaceTransactions(token, {
           categorySyncId,
-          ledgerId: activeLedgerId || undefined,
+          ledgerId: scope === 'current' ? activeLedgerId || undefined : undefined,
           limit: DETAIL_PAGE_SIZE,
           offset,
         })
@@ -154,16 +170,16 @@ export function GlobalEntityDialogs() {
     [token, activeLedgerId],
   )
 
-  /** 拉一次大批量(限定当前账本)用于客户端聚合 KPI / 趋势 / Top。
-   *  cap=1000 — 超过显示截断提示,KPI 仍可用但精度下降。 */
+  /** 拉一次大批量用于客户端聚合 KPI / 趋势 / Top。scope=current 限定当前账本,
+   *  scope=all 跨账本。cap=1000 — 超过显示截断提示,KPI 仍可用但精度下降。 */
   const loadCategoryStats = useCallback(
-    async (categorySyncId: string) => {
+    async (categorySyncId: string, scope: DetailScope) => {
       setCategoryStatsLoading(true)
       setCategoryStatsTruncated(false)
       try {
         const page = await fetchWorkspaceTransactions(token, {
           categorySyncId,
-          ledgerId: activeLedgerId || undefined,
+          ledgerId: scope === 'current' ? activeLedgerId || undefined : undefined,
           limit: CATEGORY_STATS_LIMIT,
           offset: 0,
         })
@@ -180,27 +196,44 @@ export function GlobalEntityDialogs() {
 
   // 监听 category detail
   useEffect(() => {
-    return onOpenDetailCategory((cat) => {
+    return onOpenDetailCategory((cat, defaultScope) => {
       setCategory(cat)
+      setCategoryScope(defaultScope)
       setCategoryTxs([])
       setCategoryTotal(0)
       setCategoryOffset(0)
       setCategoryStatsTxs([])
       setCategoryStatsTruncated(false)
-      void loadCategoryTxs(cat.id, 0)
-      void loadCategoryStats(cat.id)
+      void loadCategoryTxs(cat.id, defaultScope, 0)
+      void loadCategoryStats(cat.id, defaultScope)
       if (tagsDict.length === 0) {
         void fetchWorkspaceTags(token, { limit: 500 }).then(setTagsDict).catch(() => undefined)
       }
     })
   }, [loadCategoryTxs, loadCategoryStats, token, tagsDict.length])
 
+  const handleCategoryScopeChange = useCallback(
+    (next: DetailScope) => {
+      if (!category || next === categoryScope) return
+      setCategoryScope(next)
+      setCategoryTxs([])
+      setCategoryTotal(0)
+      setCategoryOffset(0)
+      setCategoryStatsTxs([])
+      setCategoryStatsTruncated(false)
+      void loadCategoryTxs(category.id, next, 0)
+      void loadCategoryStats(category.id, next)
+    },
+    [category, categoryScope, loadCategoryTxs, loadCategoryStats],
+  )
+
   const loadTagTxs = useCallback(
-    async (tagSyncId: string, offset: number) => {
+    async (tagSyncId: string, scope: DetailScope, offset: number) => {
       setTagLoading(true)
       try {
         const page = await fetchWorkspaceTransactions(token, {
           tagSyncId,
+          ledgerId: scope === 'current' ? activeLedgerId || undefined : undefined,
           limit: DETAIL_PAGE_SIZE,
           offset,
         })
@@ -213,22 +246,35 @@ export function GlobalEntityDialogs() {
         setTagLoading(false)
       }
     },
-    [token],
+    [token, activeLedgerId],
   )
 
   // 监听 tag detail
   useEffect(() => {
-    return onOpenDetailTag((nextTag) => {
+    return onOpenDetailTag((nextTag, defaultScope) => {
       setTag(nextTag)
+      setTagScope(defaultScope)
       setTagTxs([])
       setTagTotal(0)
       setTagOffset(0)
-      void loadTagTxs(nextTag.id, 0)
+      void loadTagTxs(nextTag.id, defaultScope, 0)
       if (tagsDict.length === 0) {
         void fetchWorkspaceTags(token, { limit: 500 }).then(setTagsDict).catch(() => undefined)
       }
     })
   }, [loadTagTxs, token, tagsDict.length])
+
+  const handleTagScopeChange = useCallback(
+    (next: DetailScope) => {
+      if (!tag || next === tagScope) return
+      setTagScope(next)
+      setTagTxs([])
+      setTagTotal(0)
+      setTagOffset(0)
+      void loadTagTxs(tag.id, next, 0)
+    },
+    [tag, tagScope, loadTagTxs],
+  )
 
   // 详情 → 编辑:派发事件到 GlobalEditDialogs(任何页都挂载,事件总能被
   // 接住,无需跳页)。Category 编辑暂时还要 fallback 跳页(分类编辑表单
@@ -251,15 +297,19 @@ export function GlobalEntityDialogs() {
 
   const handleJumpToTransactions = useCallback(
     (cat: WorkspaceCategory) => {
+      const scopeAtJump = categoryScope
       setCategory(null)
-      // CategoryDetail 限定当前账本,所以这里也带上 ledger filter — TransactionsPage
-      // 读 ?q= 会做模糊搜索,但 ledger filter 用 ?ledger=,跟 CategoriesPage 写法一致。
+      // 跳过去的 TransactionsPage ledger filter 跟当前 scope 对齐:current
+      // 时带 ledger=...,all 时不限制账本,避免用户切到「全部账本」却跳进单
+      // 账本列表造成迷惑。
       const params = new URLSearchParams()
       params.set('q', cat.name)
-      if (activeLedgerId) params.set('ledger', activeLedgerId)
+      if (scopeAtJump === 'current' && activeLedgerId) {
+        params.set('ledger', activeLedgerId)
+      }
       navigate(`/app/transactions?${params.toString()}`)
     },
-    [navigate, activeLedgerId],
+    [navigate, activeLedgerId, categoryScope],
   )
 
   return (
@@ -272,16 +322,20 @@ export function GlobalEntityDialogs() {
       />
       <AccountDetailDialog
         account={account}
+        scope={accountScope}
+        onScopeChange={handleAccountScopeChange}
         transactions={accountTxs}
         total={accountTotal}
         offset={accountOffset}
         loading={accountLoading}
         tags={tagsDict}
         onClose={() => setAccount(null)}
-        onLoadMore={(name, off) => void loadAccountTxs(name, off)}
+        onLoadMore={(name, off) => void loadAccountTxs(name, accountScope, off)}
       />
       <CategoryDetailDialog
         category={category}
+        scope={categoryScope}
+        onScopeChange={handleCategoryScopeChange}
         currency={activeCurrency}
         statsTransactions={categoryStatsTxs}
         statsLoading={categoryStatsLoading}
@@ -293,12 +347,14 @@ export function GlobalEntityDialogs() {
         tags={tagsDict}
         iconPreviewUrlByFileId={iconPreviewByFileId}
         onClose={() => setCategory(null)}
-        onLoadMore={(syncId, off) => void loadCategoryTxs(syncId, off)}
+        onLoadMore={(syncId, off) => void loadCategoryTxs(syncId, categoryScope, off)}
         onEdit={handleEditCategory}
         onJumpToTransactions={handleJumpToTransactions}
       />
       <TagDetailDialog
         tag={tag}
+        scope={tagScope}
+        onScopeChange={handleTagScopeChange}
         transactions={tagTxs}
         total={tagTotal}
         offset={tagOffset}
@@ -306,7 +362,7 @@ export function GlobalEntityDialogs() {
         tags={tagsDict}
         tagStatsById={{}}
         onClose={() => setTag(null)}
-        onLoadMore={(syncId, off) => void loadTagTxs(syncId, off)}
+        onLoadMore={(syncId, off) => void loadTagTxs(syncId, tagScope, off)}
       />
     </>
   )

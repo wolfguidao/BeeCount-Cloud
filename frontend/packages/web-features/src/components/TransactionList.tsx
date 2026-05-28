@@ -53,6 +53,8 @@ interface Props {
   /** §7 共享账本:当前 caller user_id,用来过滤"自己创建+编辑"的 tx 不显示
    *  chip。透传给 TransactionRow。 */
   currentUserId?: string | null
+  /** 跨账本场景显示账本名 chip(详情弹窗 scope='all' 时开启)。透传给行组件。 */
+  showLedger?: boolean
 }
 
 /**
@@ -85,7 +87,8 @@ export function TransactionList({
   selectedIds,
   onToggleSelect,
   showCreator = false,
-  currentUserId
+  currentUserId,
+  showLedger = false
 }: Props) {
   const t = useT()
   const sentinelRef = useRef<HTMLDivElement | null>(null)
@@ -154,6 +157,7 @@ export function TransactionList({
                 selectionMode={selectionMode}
                 selected={selectedIds?.has(row.id) ?? false}
                 onToggleSelect={onToggleSelect}
+                showLedger={showLedger}
               />
             </li>
           ))}

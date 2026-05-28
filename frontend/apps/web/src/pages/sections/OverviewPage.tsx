@@ -257,7 +257,8 @@ export function OverviewPage() {
           (c.kind || '').toLowerCase() === kind,
       )
       if (cat) {
-        dispatchOpenDetailCategory(cat)
+        // 首页 Top 分类卡片 → 默认当前账本,跟 OverviewPage 其它图表口径一致。
+        dispatchOpenDetailCategory(cat, { defaultScope: 'current' })
         return
       }
       const params = new URLSearchParams({ q: trimmed })

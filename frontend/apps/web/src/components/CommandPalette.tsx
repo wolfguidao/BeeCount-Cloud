@@ -233,7 +233,12 @@ export function CommandPalette({ open, onClose, onOpenAnnualReport }: CommandPal
       if (window.location.pathname !== '/app/accounts') {
         navigate('/app/accounts')
       }
-      setTimeout(() => dispatchOpenDetailAccount(account), 50)
+      // CommandPalette 跳的目标是 /app/accounts 这种一级页面,跟从页面直接
+      // 点卡片的入口语义一致 → 默认跨账本。
+      setTimeout(
+        () => dispatchOpenDetailAccount(account, { defaultScope: 'all' }),
+        50,
+      )
     },
     [navigate, onClose],
   )
@@ -244,7 +249,10 @@ export function CommandPalette({ open, onClose, onOpenAnnualReport }: CommandPal
       if (window.location.pathname !== '/app/tags') {
         navigate('/app/tags')
       }
-      setTimeout(() => dispatchOpenDetailTag(tag), 50)
+      setTimeout(
+        () => dispatchOpenDetailTag(tag, { defaultScope: 'all' }),
+        50,
+      )
     },
     [navigate, onClose],
   )
@@ -255,7 +263,10 @@ export function CommandPalette({ open, onClose, onOpenAnnualReport }: CommandPal
       if (window.location.pathname !== '/app/categories') {
         navigate('/app/categories')
       }
-      setTimeout(() => dispatchOpenDetailCategory(cat), 50)
+      setTimeout(
+        () => dispatchOpenDetailCategory(cat, { defaultScope: 'all' }),
+        50,
+      )
     },
     [navigate, onClose],
   )

@@ -237,7 +237,7 @@ export function AccountsPage() {
           })
         }}
         onClickAccount={(row) =>
-          dispatchOpenDetailAccount(row as WorkspaceAccount)
+          dispatchOpenDetailAccount(row as WorkspaceAccount, { defaultScope: 'all' })
         }
         onDelete={(row) => {
           // 严格策略:有关联交易直接拒绝,不弹"是否强制删除"。先要求用户在

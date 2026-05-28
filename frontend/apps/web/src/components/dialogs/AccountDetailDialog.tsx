@@ -13,6 +13,9 @@ import {
 import { TransactionList } from '@beecount/web-features'
 import { Banknote, Calendar as CalendarIcon, CreditCard } from 'lucide-react'
 
+import type { DetailScope } from '../../lib/txDialogEvents'
+import { DetailScopeToggle } from './DetailScopeToggle'
+
 type AccountWithStats = ReadAccount & {
   tx_count?: number | null
   income_total?: number | null
@@ -22,6 +25,8 @@ type AccountWithStats = ReadAccount & {
 
 interface Props {
   account: AccountWithStats | null
+  scope: DetailScope
+  onScopeChange: (next: DetailScope) => void
   transactions: WorkspaceTransaction[]
   total: number
   offset: number
@@ -36,6 +41,8 @@ interface Props {
 /** 点账户卡片弹出的详情:顶部账户名 + 当前余额/累计收入/累计支出 + 交易列表(无限滚动加载)。 */
 export function AccountDetailDialog({
   account,
+  scope,
+  onScopeChange,
   transactions,
   total,
   offset,
@@ -50,12 +57,18 @@ export function AccountDetailDialog({
   return (
     <Dialog open={Boolean(account)} onOpenChange={(open) => !open && onClose()}>
       <DialogContent className="flex max-h-[85vh] max-w-2xl flex-col gap-0 overflow-hidden p-0">
-        <DialogHeader className="border-b border-border/60 px-6 py-4">
+        <DialogHeader className="flex flex-row items-center justify-between gap-3 border-b border-border/60 px-6 py-4">
           <DialogTitle className="truncate">{account?.name || ''}</DialogTitle>
+          <DetailScopeToggle value={scope} onChange={onScopeChange} className="shrink-0" />
         </DialogHeader>
         {account ? (
           <div className="flex min-h-0 flex-1 flex-col">
-            {/* 统计:优先 server 返回的 balance/income/expense,缺失时兜底 initial_balance */}
+            {/* 统计:优先 server 返回的 balance/income/expense,缺失时兜底 initial_balance.
+                注意:这里的统计来自 props 上的 account 实体,本身是按上层 scope
+                取的(GlobalEntityDialogs / AccountsPage 通过 fetchWorkspaceAccounts
+                的 ledgerId 参数控制)。弹窗顶部 scope 切换只影响交易列表过滤,
+                上面这块 KPI 沿用打开时的快照,不跟随 scope 实时切换 —
+                跟 mobile 端 account_detail_page 行为一致。 */}
             <AccountStatsHeader account={account} t={t} />
 
             {/* 信用卡 / 银行卡专属信息:bank_name / 卡号末 4 / 信用额度 /
@@ -75,6 +88,7 @@ export function AccountDetailDialog({
                 onPreviewAttachment={onPreviewAttachment as never}
                 resolveAttachmentPreviewUrl={resolveAttachmentPreviewUrl as never}
                 emptyTitle={t('transactions.empty.forAccount.title')}
+                showLedger={scope === 'all'}
               />
             </div>
           </div>

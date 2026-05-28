@@ -11,6 +11,10 @@ import { useT } from '@beecount/ui'
 import type { BudgetUsage } from '@beecount/web-features'
 
 import { useLedgers } from '../../context/LedgersContext'
+import {
+  dispatchOpenDetailAccount,
+  dispatchOpenDetailTag,
+} from '../../lib/txDialogEvents'
 import { HomeHero } from '../dashboard/HomeHero'
 import { HomeHabitStats } from '../dashboard/HomeHabitStats'
 import { HomeYearHeatmap } from '../dashboard/HomeYearHeatmap'
@@ -152,9 +156,17 @@ export function OverviewSection({
         <HomeTopTags
           tags={tags}
           currency={currency}
-          onClickTag={onJumpToTransactionsWithQuery}
+          onSelectTag={(tag) =>
+            dispatchOpenDetailTag(tag, { defaultScope: 'current' })
+          }
         />
-        <HomeTopAccounts accounts={accounts} currency={currency} />
+        <HomeTopAccounts
+          accounts={accounts}
+          currency={currency}
+          onSelectAccount={(acc) =>
+            dispatchOpenDetailAccount(acc, { defaultScope: 'current' })
+          }
+        />
       </div>
     </div>
   )

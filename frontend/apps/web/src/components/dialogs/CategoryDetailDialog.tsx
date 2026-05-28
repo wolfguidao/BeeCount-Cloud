@@ -15,6 +15,9 @@ import {
 } from '@beecount/ui'
 import { Amount, CategoryIcon, TransactionList } from '@beecount/web-features'
 import { ArrowRight, Edit3, TrendingDown, TrendingUp } from 'lucide-react'
+
+import type { DetailScope } from '../../lib/txDialogEvents'
+import { DetailScopeToggle } from './DetailScopeToggle'
 import {
   Bar,
   BarChart,
@@ -28,6 +31,10 @@ import {
 
 interface Props {
   category: WorkspaceCategory | null
+  /** 账本作用域:'all' 跨账本聚合,'current' 仅当前账本。控制交易列表 +
+   *  统计的 ledger filter,顶部 toggle 可切换。 */
+  scope: DetailScope
+  onScopeChange: (next: DetailScope) => void
   /** 当前账本币种,KPI / 趋势图金额都按这个币种展示。 */
   currency: string
   /** 当前账本下该分类的全量(或近 N 条)交易,用于客户端聚合 KPI / 趋势 / Top 列表。 */
@@ -84,6 +91,8 @@ interface StatsAgg {
  */
 export function CategoryDetailDialog({
   category,
+  scope,
+  onScopeChange,
   currency,
   statsTransactions,
   transactions,
@@ -145,7 +154,7 @@ export function CategoryDetailDialog({
   return (
     <Dialog open={Boolean(category)} onOpenChange={(open) => !open && onClose()}>
       <DialogContent className="flex max-h-[88vh] max-w-2xl flex-col gap-0 overflow-hidden p-0">
-        <DialogHeader className="border-b border-border/60 bg-gradient-to-br from-muted/40 to-transparent px-6 py-4">
+        <DialogHeader className="flex flex-row items-start justify-between gap-3 border-b border-border/60 bg-gradient-to-br from-muted/40 to-transparent px-6 py-4">
           <DialogTitle className="flex items-center gap-3">
             {category ? (
               <span
@@ -188,6 +197,7 @@ export function CategoryDetailDialog({
               </span>
             </div>
           </DialogTitle>
+          <DetailScopeToggle value={scope} onChange={onScopeChange} className="mt-1 shrink-0" />
         </DialogHeader>
 
         {category ? (
@@ -271,6 +281,7 @@ export function CategoryDetailDialog({
                 onPreviewAttachment={onPreviewAttachment}
                 emptyTitle={t('detail.category.empty.title')}
                 emptyDescription={t('detail.category.empty.desc')}
+                showLedger={scope === 'all'}
               />
             </div>
 
