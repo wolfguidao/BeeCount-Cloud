@@ -37,10 +37,12 @@ export function OverviewPage() {
   const { activeLedgerId } = useLedgers()
 
   // Overview 的所有数据按当前账本分桶 —— 切账本时读对应桶,没命中显示空
-  // 态后台 refetch。accounts / tags 是 user-global 不按账本分。
+  // 态后台 refetch。accounts / tags 实体本身是 user-global,但首页 Top 卡片
+  // 想看的是「当前账本里活跃的账户/标签」,所以 stats 用 ledger 过滤,
+  // 缓存也按账本分桶。资产页/标签页要跨账本时另外不带 ledgerId 拉。
   const bucket = activeLedgerId || '__none__'
-  const [accounts, setAccounts] = usePageCache<WorkspaceAccount[]>('overview:accounts', [])
-  const [tags, setTags] = usePageCache<WorkspaceTag[]>('overview:tags', [])
+  const [accounts, setAccounts] = usePageCache<WorkspaceAccount[]>(`overview:${bucket}:accounts`, [])
+  const [tags, setTags] = usePageCache<WorkspaceTag[]>(`overview:${bucket}:tags`, [])
   // 当前账本下的全部分类(用于把 TopCategoriesList 里的 category_name 反查
   // 成完整 WorkspaceCategory,从而打开富统计详情弹窗)。activeLedgerId 变了
   // 重拉,避免错按本来不在当前账本的分类查 stats。
@@ -93,17 +95,18 @@ export function OverviewPage() {
   >(`overview:${bucket}:budgetUsage`, {})
 
   const loadAccountsAndTags = useCallback(async () => {
+    if (!activeLedgerId) return
     try {
       const [a, tg] = await Promise.all([
-        fetchWorkspaceAccounts(token, { limit: 500 }),
-        fetchWorkspaceTags(token, { limit: 500 }),
+        fetchWorkspaceAccounts(token, { ledgerId: activeLedgerId, limit: 500 }),
+        fetchWorkspaceTags(token, { ledgerId: activeLedgerId, limit: 500 }),
       ])
       setAccounts(a)
       setTags(tg)
     } catch {
       // dashboard 静默降级
     }
-  }, [token])
+  }, [token, activeLedgerId])
 
   const loadCategories = useCallback(async () => {
     if (!activeLedgerId) {
