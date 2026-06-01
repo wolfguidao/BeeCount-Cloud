@@ -52,9 +52,157 @@ type CardBodyProps = {
   ) => ReactNode
 }
 
+type RenderIcon = (
+  icon: string | null | undefined,
+  iconType: string | null | undefined,
+  iconCloudFileId?: string | null
+) => ReactNode
+
+/** 按窗口宽度选网格列数(管理页比选择器宽,桌面端铺密一点)。 */
+function pickColumns(): number {
+  if (typeof window === 'undefined') return 5
+  const w = window.innerWidth
+  if (w < 640) return 3
+  if (w < 900) return 4
+  if (w < 1280) return 5
+  return 6
+}
+
 /**
- * 分类卡片视图：kind tab（支出 / 收入 / 转账）+ 父分类分组，子分类以小卡嵌
- * 在父卡片下方。与 mobile 的 category_manage_page 结构对齐。
+ * 单个分类格子(管理页版)。视觉对齐 CategorySelector 的 CategoryCell:圆形
+ * 图标 + 名字;父级带子类时右下角 "⋯" 徽章、展开态 ring 高亮。比选择器多两样:
+ *   - 笔数 badge
+ *   - hover 才出现的 编辑 / 删除 小图标(右上角)
+ * 用 `div[role=button]` 而非 `button`,以便内部嵌 编辑/删除 `button`(避免非法
+ * 的 button-in-button)。
+ */
+function ManageCategoryCell({
+  category,
+  renderIcon,
+  count,
+  countUnit,
+  hasChildren = false,
+  expanded = false,
+  compact = false,
+  interactive,
+  onActivate,
+  onEdit,
+  onDelete,
+  canManage,
+  editLabel,
+  deleteLabel,
+}: {
+  category: WorkspaceCategory
+  renderIcon: RenderIcon
+  count: number
+  countUnit: string
+  hasChildren?: boolean
+  expanded?: boolean
+  compact?: boolean
+  interactive: boolean
+  onActivate: () => void
+  onEdit: () => void
+  onDelete?: () => void
+  canManage: boolean
+  editLabel: string
+  deleteLabel: string
+}) {
+  const circleSize = compact ? 'h-12 w-12' : 'h-14 w-14'
+  return (
+    <div
+      role={interactive ? 'button' : undefined}
+      tabIndex={interactive ? 0 : undefined}
+      aria-expanded={hasChildren ? expanded : undefined}
+      onClick={interactive ? onActivate : undefined}
+      onKeyDown={
+        interactive
+          ? (e) => {
+              if (e.key === 'Enter' || e.key === ' ') {
+                e.preventDefault()
+                onActivate()
+              }
+            }
+          : undefined
+      }
+      className={`group relative flex flex-col items-center gap-1.5 rounded-xl border p-3 text-center transition ${
+        expanded ? 'border-primary/40 bg-primary/5' : 'border-border/50 bg-card/50'
+      } ${interactive ? 'cursor-pointer hover:border-primary/40 hover:bg-accent/30' : ''}`}
+    >
+      {/* hover 才出现的编辑/删除 —— 绝对定位右上角,不挤占格子布局 */}
+      <div className="absolute right-1 top-1 flex items-center gap-0.5 opacity-0 transition-opacity focus-within:opacity-100 group-hover:opacity-100">
+        <button
+          type="button"
+          title={editLabel}
+          aria-label={editLabel}
+          disabled={!canManage}
+          onClick={(e) => {
+            e.stopPropagation()
+            onEdit()
+          }}
+          className="rounded-md p-1 text-muted-foreground transition-colors hover:bg-muted hover:text-primary disabled:opacity-40"
+        >
+          <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+               strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden>
+            <path d="M12 20h9" />
+            <path d="M16.5 3.5a2.12 2.12 0 0 1 3 3L7 19l-4 1 1-4Z" />
+          </svg>
+        </button>
+        {onDelete ? (
+          <button
+            type="button"
+            title={deleteLabel}
+            aria-label={deleteLabel}
+            disabled={!canManage}
+            onClick={(e) => {
+              e.stopPropagation()
+              onDelete()
+            }}
+            className="rounded-md p-1 text-muted-foreground transition-colors hover:bg-muted hover:text-destructive disabled:opacity-40"
+          >
+            <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+                 strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden>
+              <path d="M3 6h18" />
+              <path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6" />
+              <path d="M8 6V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2" />
+            </svg>
+          </button>
+        ) : null}
+      </div>
+
+      <div className="relative">
+        <div
+          className={`flex ${circleSize} items-center justify-center rounded-full transition-all ${
+            expanded
+              ? 'bg-primary/15 ring-2 ring-primary/50'
+              : 'bg-muted/60 group-hover:bg-accent/60'
+          }`}
+        >
+          {renderIcon(category.icon, category.icon_type, category.icon_cloud_file_id)}
+        </div>
+        {hasChildren && !compact ? (
+          <span
+            aria-hidden
+            className="absolute -bottom-1 -right-1 flex h-5 w-5 items-center justify-center rounded-full border-2 border-background bg-muted text-[10px] leading-none text-muted-foreground"
+          >
+            ⋯
+          </span>
+        ) : null}
+      </div>
+
+      <span className="max-w-full truncate text-xs font-medium" title={category.name}>
+        {category.name}
+      </span>
+      <span className="rounded-full bg-muted px-1.5 py-0.5 text-[10px] leading-none text-muted-foreground tabular-nums">
+        {count} {countUnit}
+      </span>
+    </div>
+  )
+}
+
+/**
+ * 分类卡片视图:kind tab(支出 / 收入 / 转账)+ 一级分类按网格平铺(一行多
+ * 个),点击有子类的父级 → 在该行下方原地展开子类网格。布局 / 交互对齐 web
+ * 分类选择器(CategorySelector)与 mobile category_selector,跨端一致。
  */
 function CategoriesCardBody({
   rows,
@@ -62,12 +210,20 @@ function CategoriesCardBody({
   onDelete,
   onRowClick,
   canManage,
-  showCreatorColumn,
   txCountById = {},
   renderIcon
 }: CardBodyProps) {
   const t = useT()
   const [activeKind, setActiveKind] = useState<CategoryKind>('expense')
+  // 单开手风琴(跟选择器 / mobile 一致):同时只展开一个父级。
+  const [expandedParentId, setExpandedParentId] = useState<string | null>(null)
+  // 网格列数随窗口宽度自适应。
+  const [columns, setColumns] = useState<number>(() => pickColumns())
+  useEffect(() => {
+    const onResize = () => setColumns(pickColumns())
+    window.addEventListener('resize', onResize)
+    return () => window.removeEventListener('resize', onResize)
+  }, [])
   const grouped = useMemo(() => {
     // 用 WorkspaceCategory 而不是 ReadCategory — 保留 ledger_id / tx_count 等字段,
     // 行点击回调要把完整 WorkspaceCategory 传给详情弹窗。
@@ -116,6 +272,22 @@ function CategoriesCardBody({
   const parents = grouped.parentsByKind[activeKind]
   const kinds: CategoryKind[] = ['expense', 'income', 'transfer']
 
+  const childrenOf = (parent: WorkspaceCategory) =>
+    grouped.childrenByParent[`${activeKind}::${parent.name.toLowerCase()}`] || []
+
+  // 一级分类按 columns 切成若干"行";展开父级所在行的下方插一个子类容器
+  // (跟 CategorySelector 的"原地展开"同款),避免子类跑到整页网格末尾。
+  const rowsOfParents: WorkspaceCategory[][] = []
+  for (let i = 0; i < parents.length; i += columns) {
+    rowsOfParents.push(parents.slice(i, i + columns))
+  }
+  // 用 CSS 变量驱动列数,避免 tailwind 任意值在生产构建被 purge 误删。
+  const gridStyle = { ['--cols' as string]: String(columns) }
+  const gridClass = 'grid gap-3 [grid-template-columns:repeat(var(--cols),minmax(0,1fr))]'
+  const countUnit = t('tags.count.unit')
+  const editLabel = t('common.edit')
+  const deleteLabel = t('common.delete')
+
   return (
     <div className="space-y-4">
       {/* tabs — 选中态用主题色背景 + 主题色左边框强化存在感，dark mode 下
@@ -158,139 +330,67 @@ function CategoriesCardBody({
         </div>
       ) : (
         <div className="space-y-3">
-          {parents.map((parent) => {
-            const children =
-              grouped.childrenByParent[`${activeKind}::${parent.name.toLowerCase()}`] || []
+          {rowsOfParents.map((row, rowIdx) => {
+            // 该行里若有展开的父级 → 行下方插一个子类容器(原地展开,跟选择器一致)
+            const expandedInRow = row.find(
+              (p) => p.id === expandedParentId && childrenOf(p).length > 0
+            )
+            const expandedChildren = expandedInRow ? childrenOf(expandedInRow) : []
             return (
-              <div key={parent.id} className="rounded-xl border border-border/60 bg-card/60 p-3">
-                {/* parent row — 整行可点击进详情;Edit/Delete 按钮 stopPropagation 防双触发 */}
-                <div
-                  role={onRowClick ? 'button' : undefined}
-                  tabIndex={onRowClick ? 0 : undefined}
-                  onClick={onRowClick ? () => onRowClick(parent) : undefined}
-                  onKeyDown={
-                    onRowClick
-                      ? (e) => {
-                          if (e.key === 'Enter' || e.key === ' ') {
-                            e.preventDefault()
+              <div key={`row-${rowIdx}`} className="space-y-3">
+                <div className={gridClass} style={gridStyle}>
+                  {row.map((parent) => {
+                    const children = childrenOf(parent)
+                    const hasChildren = children.length > 0
+                    const isExpanded = expandedParentId === parent.id && hasChildren
+                    return (
+                      <ManageCategoryCell
+                        key={parent.id}
+                        category={parent}
+                        renderIcon={renderIcon}
+                        count={txCountById[parent.id] ?? 0}
+                        countUnit={countUnit}
+                        hasChildren={hasChildren}
+                        expanded={isExpanded}
+                        interactive={hasChildren || !!onRowClick}
+                        onActivate={() => {
+                          if (hasChildren) {
+                            setExpandedParentId((prev) => (prev === parent.id ? null : parent.id))
+                          } else if (onRowClick) {
                             onRowClick(parent)
                           }
-                        }
-                      : undefined
-                  }
-                  className={`flex items-center justify-between gap-3 ${
-                    onRowClick
-                      ? '-mx-1 -my-1 cursor-pointer rounded-lg px-1 py-1 transition hover:bg-muted/40'
-                      : ''
-                  }`}
-                >
-                  <div className="flex min-w-0 items-center gap-2.5">
-                    <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg bg-primary/10">
-                      {renderIcon(parent.icon, parent.icon_type, parent.icon_cloud_file_id)}
-                    </div>
-                    <div className="min-w-0">
-                      <div className="flex items-center gap-1.5">
-                        <span className="truncate text-sm font-semibold">{parent.name}</span>
-                        {/* 笔数 badge:跟 app 端 category_manage_page 对齐,
-                            一眼看出哪个分类用得最多。0 笔的会显示 0,跟 tag 行为一致。 */}
-                        <span className="shrink-0 rounded-full bg-muted px-1.5 py-0.5 text-[10px] leading-none text-muted-foreground tabular-nums">
-                          {txCountById[parent.id] ?? 0} {t('tags.count.unit')}
-                        </span>
-                      </div>
-                      {showCreatorColumn ? (
-                        <div className="truncate text-[11px] text-muted-foreground">
-                          {parent.created_by_email || parent.created_by_user_id || '-'}
-                        </div>
-                      ) : null}
-                    </div>
-                  </div>
-                  <div className="flex items-center gap-2 shrink-0">
-                    <button
-                      className="text-xs text-muted-foreground hover:text-primary"
-                      disabled={!canManage}
-                      type="button"
-                      onClick={(e) => {
-                        e.stopPropagation()
-                        onEdit(parent)
-                      }}
-                    >
-                      {t('common.edit')}
-                    </button>
-                    {onDelete ? (
-                      <button
-                        className="text-xs text-muted-foreground hover:text-destructive"
-                        disabled={!canManage}
-                        type="button"
-                        onClick={(e) => {
-                          e.stopPropagation()
-                          onDelete(parent)
                         }}
-                      >
-                        {t('common.delete')}
-                      </button>
-                    ) : null}
-                  </div>
+                        onEdit={() => onEdit(parent)}
+                        onDelete={onDelete ? () => onDelete(parent) : undefined}
+                        canManage={canManage}
+                        editLabel={editLabel}
+                        deleteLabel={deleteLabel}
+                      />
+                    )
+                  })}
                 </div>
-                {/* children grid */}
-                {children.length > 0 ? (
-                  <div className="mt-3 grid gap-2 pl-12 sm:grid-cols-2 lg:grid-cols-3">
-                    {children.map((child) => (
-                      <div
-                        key={child.id}
-                        role={onRowClick ? 'button' : undefined}
-                        tabIndex={onRowClick ? 0 : undefined}
-                        onClick={onRowClick ? () => onRowClick(child) : undefined}
-                        onKeyDown={
-                          onRowClick
-                            ? (e) => {
-                                if (e.key === 'Enter' || e.key === ' ') {
-                                  e.preventDefault()
-                                  onRowClick(child)
-                                }
-                              }
-                            : undefined
-                        }
-                        className={`group flex items-center justify-between gap-2 rounded-lg border border-border/40 bg-background/60 px-2.5 py-1.5 text-xs ${
-                          onRowClick ? 'cursor-pointer transition hover:border-primary/40 hover:bg-primary/5' : ''
-                        }`}
-                      >
-                        <div className="flex min-w-0 items-center gap-2">
-                          <div className="flex h-6 w-6 shrink-0 items-center justify-center rounded-md bg-muted/50">
-                            {renderIcon(child.icon, child.icon_type, child.icon_cloud_file_id)}
-                          </div>
-                          <span className="truncate">{child.name}</span>
-                          <span className="shrink-0 rounded-full bg-muted px-1.5 py-0.5 text-[9px] leading-none text-muted-foreground tabular-nums">
-                            {txCountById[child.id] ?? 0} {t('tags.count.unit')}
-                          </span>
-                        </div>
-                        <div className="flex items-center gap-2 opacity-0 transition-opacity group-hover:opacity-100">
-                          <button
-                            className="text-[10px] text-muted-foreground hover:text-primary"
-                            disabled={!canManage}
-                            type="button"
-                            onClick={(e) => {
-                              e.stopPropagation()
-                              onEdit(child)
-                            }}
-                          >
-                            {t('common.edit')}
-                          </button>
-                          {onDelete ? (
-                            <button
-                              className="text-[10px] text-muted-foreground hover:text-destructive"
-                              disabled={!canManage}
-                              type="button"
-                              onClick={(e) => {
-                                e.stopPropagation()
-                                onDelete(child)
-                              }}
-                            >
-                              {t('common.delete')}
-                            </button>
-                          ) : null}
-                        </div>
-                      </div>
-                    ))}
+                {/* 展开父级的子类:浅色卡片框起来,跟父级网格区分从属关系 */}
+                {expandedInRow && expandedChildren.length > 0 ? (
+                  <div className="rounded-xl border border-border/50 bg-muted/30 p-3 ring-1 ring-primary/15">
+                    <div className={gridClass} style={gridStyle}>
+                      {expandedChildren.map((child) => (
+                        <ManageCategoryCell
+                          key={child.id}
+                          category={child}
+                          renderIcon={renderIcon}
+                          count={txCountById[child.id] ?? 0}
+                          countUnit={countUnit}
+                          compact
+                          interactive={!!onRowClick}
+                          onActivate={() => onRowClick?.(child)}
+                          onEdit={() => onEdit(child)}
+                          onDelete={onDelete ? () => onDelete(child) : undefined}
+                          canManage={canManage}
+                          editLabel={editLabel}
+                          deleteLabel={deleteLabel}
+                        />
+                      ))}
+                    </div>
                   </div>
                 ) : null}
               </div>
