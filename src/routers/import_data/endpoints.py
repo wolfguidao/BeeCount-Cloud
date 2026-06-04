@@ -76,6 +76,9 @@ class FieldMappingPayload(BaseModel):
     datetime_format: str | None = None
     strip_currency_symbols: bool = True
     expense_is_negative: bool = False
+    # 客户端本地时区相对 UTC 的分钟偏移(东为正,UTC+8 = 480);用于把 CSV 本地
+    # 时间正确换算成 UTC(issue #314)。前端传 -new Date().getTimezoneOffset()。
+    tz_offset_minutes: int | None = None
 
     def to_internal(self) -> ImportFieldMapping:
         return ImportFieldMapping(
@@ -92,6 +95,7 @@ class FieldMappingPayload(BaseModel):
             datetime_format=self.datetime_format,
             strip_currency_symbols=self.strip_currency_symbols,
             expense_is_negative=self.expense_is_negative,
+            tz_offset_minutes=self.tz_offset_minutes,
         )
 
 
@@ -110,6 +114,7 @@ def _mapping_to_payload(m: ImportFieldMapping) -> dict:
         "datetime_format": m.datetime_format,
         "strip_currency_symbols": m.strip_currency_symbols,
         "expense_is_negative": m.expense_is_negative,
+        "tz_offset_minutes": m.tz_offset_minutes,
     }
 
 
@@ -150,6 +155,9 @@ async def upload_import(
     request: Request,
     file: UploadFile = File(...),
     target_ledger_id: str | None = Form(default=None),
+    # 客户端本地时区相对 UTC 的分钟偏移(东为正,UTC+8 = 480)。CSV/Excel 里的
+    # 时间是用户本地墙钟,据此换算成 UTC(issue #314)。None = 老客户端未传。
+    tz_offset_minutes: int | None = Form(default=None),
     _scopes: set[str] = Depends(_WRITE_SCOPE_DEP),
     current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db),
@@ -209,6 +217,10 @@ async def upload_import(
                 "limit_rows": _MAX_ROW_COUNT,
             },
         )
+
+    # 把客户端时区偏移写进 suggested_mapping —— sample_transactions / 后续
+    # preview / execute 全程继承,避免本地时间被当 UTC 整体偏移(issue #314)。
+    data.suggested_mapping.tz_offset_minutes = tz_offset_minutes
 
     # 校验 target_ledger_id(可空 — 用户可在 preview 阶段再选)
     target_ext_id = (target_ledger_id or "").strip() or None

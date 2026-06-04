@@ -182,6 +182,30 @@ def test_apply_mapping_required_field_missing():
     assert txs == []
 
 
+def test_apply_mapping_tz_offset_local_to_utc():
+    """issue #314: CSV 里是用户本地墙钟,应按客户端时区 offset 换算成 UTC,
+    而不是直接当 UTC(否则 UTC+8 用户导入后会整体晚 8 小时)。"""
+    csv = "类型,金额,时间,分类\n支出,35.00,2024-08-29 23:16,餐饮\n"
+    data = parse_csv_text(raw_text=csv)
+    mapping = data.suggested_mapping
+    mapping.tz_offset_minutes = 480  # UTC+8(北京)
+    txs, errors, _ = apply_mapping(rows=data.rows, mapping=mapping)
+    assert errors == []
+    # 23:16 北京时间 == 15:16 UTC
+    assert txs[0].happened_at == datetime(2024, 8, 29, 15, 16, tzinfo=timezone.utc)
+
+
+def test_apply_mapping_tz_offset_none_keeps_utc():
+    """未传 tz_offset(老客户端)→ 保持旧行为:naive 当 UTC,向后兼容不破坏。"""
+    csv = "类型,金额,时间,分类\n支出,35.00,2024-08-29 23:16,餐饮\n"
+    data = parse_csv_text(raw_text=csv)
+    mapping = data.suggested_mapping
+    assert mapping.tz_offset_minutes is None
+    txs, errors, _ = apply_mapping(rows=data.rows, mapping=mapping)
+    assert errors == []
+    assert txs[0].happened_at == datetime(2024, 8, 29, 23, 16, tzinfo=timezone.utc)
+
+
 def test_apply_mapping_user_override():
     """generic parser 没识别 tx_type 时,用户手填映射应该工作。"""
     csv = "状态,金额,时间,分类\n支出,35,2024-05-01,餐饮\n"
@@ -306,6 +330,31 @@ def test_upload_and_preview_happy_path():
         assert body["stats"]["by_type"]["income_count"] == 1
         assert body["import_token"]
         assert len(body["sample_rows"]) == 3
+    finally:
+        app.dependency_overrides.clear()
+
+
+def test_upload_with_tz_offset_localizes_happened_at():
+    """issue #314: upload 带 tz_offset_minutes 时,CSV 本地时间应换算成正确 UTC,
+    而非直接当 UTC(否则返回的 sample_transactions / 之后 execute 全偏 +8h)。"""
+    client = _make_client()
+    try:
+        token = _login(client, "imptz@test.com")
+        ledger_id = _make_ledger(client, token)
+        csv = "类型,分类,金额,账户,时间\n支出,彩票,819.19,工行,2026-05-23 21:28:52\n"
+        files = {"file": ("t.csv", csv.encode("utf-8"), "text/csv")}
+        r = client.post(
+            "/api/v1/import/upload",
+            files=files,
+            data={"target_ledger_id": ledger_id, "tz_offset_minutes": "480"},
+            headers={"Authorization": f"Bearer {token}"},
+        )
+        assert r.status_code == 200, r.text
+        ts = r.json()["sample_transactions"][0]["happened_at"]
+        # 21:28:52 北京(UTC+8)== 13:28:52 UTC;修复前会是 "2026-05-23T21:28:52+00:00"
+        assert datetime.fromisoformat(ts) == datetime(
+            2026, 5, 23, 13, 28, 52, tzinfo=timezone.utc
+        )
     finally:
         app.dependency_overrides.clear()
 
