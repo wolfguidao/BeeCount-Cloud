@@ -67,6 +67,10 @@ def build(db: Session, ledger: Ledger) -> dict[str, Any]:
         ReadTxProjection.attachments_json,
         ReadTxProjection.tx_index,
         ReadTxProjection.created_by_user_id,
+        # 交易级多币种(0018):full pull 重建的 item 不带这两列的话,新 App
+        # 全量同步后外币折算全部丢失(apply 缺省 nativeAmount=amount 退化 1:1)。
+        ReadTxProjection.currency_code,
+        ReadTxProjection.native_amount,
     ).where(ReadTxProjection.ledger_id == ledger_id).order_by(
         ReadTxProjection.happened_at.desc(),
         ReadTxProjection.tx_index.desc(),
@@ -78,7 +82,8 @@ def build(db: Session, ledger: Ledger) -> dict[str, Any]:
          from_sid, from_name,
          to_sid, to_name,
          tags_csv, tag_ids_json, attachments_json,
-         tx_index, created_by) = row
+         tx_index, created_by,
+         currency_code, native_amount) = row
         item: dict[str, Any] = {
             "syncId": sync_id,
             "type": tx_type,
@@ -125,6 +130,11 @@ def build(db: Session, ledger: Ledger) -> dict[str, Any]:
             item["txIndex"] = tx_index
         if created_by:
             item["createdByUserId"] = created_by
+        # NULL(旧数据)不产生 key,payload 保持干净;统计端 COALESCE 兜底。
+        if currency_code:
+            item["currencyCode"] = currency_code
+        if native_amount is not None:
+            item["nativeAmount"] = native_amount
         items.append(item)
 
     # Accounts —— user-global per-user 表,按 user_id 取。snapshot 内仍把全用户

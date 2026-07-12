@@ -95,7 +95,24 @@ export function TransactionDetailDialog({
                   minimumFractionDigits: 2,
                   maximumFractionDigits: 2,
                 })}
+                {tx.currency_code && tx.native_amount != null && tx.native_amount !== tx.amount ? (
+                  <span className="ml-2 align-middle text-sm font-medium text-muted-foreground">
+                    {tx.currency_code}
+                  </span>
+                ) : null}
               </span>
+              {/* 交易级多币种:外币交易显示折账本本位币快照(记账时汇率) */}
+              {tx.currency_code && tx.native_amount != null && tx.native_amount !== tx.amount ? (
+                <span
+                  className="text-sm tabular-nums text-muted-foreground"
+                  title={t('transactions.convertedToBase')}
+                >
+                  ≈ {tx.native_amount.toLocaleString('zh-CN', {
+                    minimumFractionDigits: 2,
+                    maximumFractionDigits: 2,
+                  })}
+                </span>
+              ) : null}
               <span className="text-xs text-muted-foreground">
                 <Calendar className="mr-1 inline h-3 w-3" />
                 {formatDateTime(tx.happened_at)}

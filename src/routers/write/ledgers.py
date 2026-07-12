@@ -12,6 +12,8 @@ from fastapi import APIRouter, Depends, Header, HTTPException, Request, status
 
 from ._shared import *  # noqa: F401,F403 — 集中从 _shared 取所有 symbol
 from ...models import AttachmentFile
+from ...services.exchange_rate import fetcher as _rate_fetcher
+from ...snapshot_mutator import _to_float as _snap_to_float
 from ...services.data_cleanup.cleaner import _remove_empty_parents
 
 router = APIRouter()
@@ -152,6 +154,31 @@ async def update_ledger_meta(
     if replay:
         return replay
 
+    # v30 改主币种(反馈20):Web 改 currency 也要重算全账本折算快照 —— 在
+    # mutate 里改 snapshot.items 的 nativeAmount,_commit_write 的 diff 基建
+    # 自动为每笔改动生成 SyncChange + 更新投影(App pull 后本地同步重算)。
+    # 汇率在此预拉(mutate 是同步函数);拉不到 → rates 空,重算退化 1:1
+    # (与 App 端语义一致:绝不保留旧本位币口径的错值,L11 横幅可捞回)。
+    old_currency_upper = (ledger.currency or "CNY").strip().upper()
+    new_currency_upper = (
+        str(payload["currency"]).strip().upper()
+        if payload.get("currency")
+        else None
+    )
+    recalc_rates: dict[str, float] = {}
+    if new_currency_upper and new_currency_upper != old_currency_upper:
+        try:
+            rate_row, _stale = await _rate_fetcher.get_rates(db, new_currency_upper)
+            for k, v in dict(rate_row.payload_json).items():
+                try:
+                    fv = float(v)
+                except (TypeError, ValueError):
+                    continue
+                if fv > 0:
+                    recalc_rates[str(k).upper()] = fv
+        except Exception:
+            recalc_rates = {}
+
     # mutate 在 _commit_write 内部跑,在 snapshot_builder 之后。
     # ledger.name / ledger.currency 必须延迟到 mutate 里改,否则 snapshot
     # _builder 读已经新值 → prev/next 一样 → diff 检测不到任何变更。
@@ -171,6 +198,22 @@ async def update_ledger_meta(
             new_currency = payload["currency"]
             next_snapshot["currency"] = new_currency
             ledger.currency = new_currency
+            # 全量重算折算快照:NULL currencyCode 的 item 语义是「旧本位币」,
+            # 显式落旧币种后按新本位币折算;缺汇率退化 =amount(1:1,L11 可捞)。
+            base = str(new_currency).strip().upper()
+            if base != old_currency_upper:
+                for item in next_snapshot.get("items", []):
+                    amount = _snap_to_float(item.get("amount"))
+                    cc = str(item.get("currencyCode") or old_currency_upper).upper()
+                    if cc == base:
+                        item["nativeAmount"] = amount
+                    else:
+                        item["currencyCode"] = cc
+                        rate = recalc_rates.get(cc)
+                        # fetcher 方向:1 新本位币 = rate cc → cc 金额折本位币要除
+                        item["nativeAmount"] = (
+                            amount / rate if rate and rate > 0 else amount
+                        )
         if "month_start_day" in payload and payload["month_start_day"] is not None:
             new_month_start_day = payload["month_start_day"]
             next_snapshot["monthStartDay"] = new_month_start_day

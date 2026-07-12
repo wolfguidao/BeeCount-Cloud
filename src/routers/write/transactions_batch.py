@@ -73,6 +73,9 @@ class BatchTransactionItem(BaseModel):
     from_account_id: str | None = None
     to_account_id: str | None = None
     tags: list[str] | None = None  # 仅接受 list 形式(B2/B3 LLM 输出 array)
+    # v30 交易级多币种:调用方(MCP)按账户/主币种定好并折算后传入
+    currency_code: str | None = None
+    native_amount: float | None = None
 
 
 class BatchCreateTxRequest(BaseModel):
@@ -383,6 +386,11 @@ def _build_tx_payload(
         "from_account_id": item.from_account_id,
         "to_account_id": item.to_account_id,
     }
+    # v30 多币种:透传给 create_transaction mutator(None 不产生 snapshot key)
+    if item.currency_code is not None:
+        payload["currency_code"] = item.currency_code
+    if item.native_amount is not None:
+        payload["native_amount"] = item.native_amount
     # 合并 auto_tag(LLM 已识别的 tags + 自动加的 AI 记账 / 图片记账)
     user_tags = list(item.tags or [])
     merged_tags = user_tags + [t for t in auto_tag_names if t and t not in user_tags]

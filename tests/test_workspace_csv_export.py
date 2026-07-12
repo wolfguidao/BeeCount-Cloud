@@ -201,7 +201,7 @@ def test_csv_header_and_bom_default_en():
         first_line = body.lstrip("\ufeff").split("\n")[0]
         # 默认 en
         assert first_line == (
-            "Type,Category,Subcategory,Amount,Account,From Account,"
+            "Type,Category,Subcategory,Amount,Currency,Account,From Account,"
             "To Account,Note,Time,Tags,Attachments"
         )
     finally:
@@ -223,7 +223,7 @@ def test_csv_header_localized_zh_cn():
             headers=web_hdr,
         )
         first_line = r.content.decode("utf-8").lstrip("\ufeff").split("\n")[0]
-        assert first_line == "类型,分类,二级分类,金额,账户,转出账户,转入账户,备注,时间,标签,附件"
+        assert first_line == "类型,分类,二级分类,金额,币种,账户,转出账户,转入账户,备注,时间,标签,附件"
     finally:
         app.dependency_overrides.clear()
 
@@ -242,7 +242,7 @@ def test_csv_header_localized_zh_tw():
             headers=web_hdr,
         )
         first_line = r.content.decode("utf-8").lstrip("\ufeff").split("\n")[0]
-        assert first_line == "類型,分類,二級分類,金額,帳戶,轉出帳戶,轉入帳戶,備註,時間,標籤,附件"
+        assert first_line == "類型,分類,二級分類,金額,幣種,帳戶,轉出帳戶,轉入帳戶,備註,時間,標籤,附件"
     finally:
         app.dependency_overrides.clear()
 
@@ -388,13 +388,13 @@ def test_csv_transfer_columns():
         )
         assert transfer_line is not None, body
         cells = transfer_line.split(",")
-        # Type, Category, SubCategory, Amount, Account, FromAccount, ToAccount
+        # Type, Category, SubCategory, Amount, Currency, Account, FromAccount, ToAccount
         assert cells[0] == "转账"
         assert cells[1] == ""  # Category 空
         assert cells[2] == ""  # SubCategory 空
-        assert cells[4] == ""  # Account 空
-        assert cells[5] == "余额宝"  # FromAccount
-        assert cells[6] == "招商信用卡"  # ToAccount
+        assert cells[5] == ""  # Account 空(v30 币种列插在 idx4)
+        assert cells[6] == "余额宝"  # FromAccount
+        assert cells[7] == "招商信用卡"  # ToAccount
     finally:
         app.dependency_overrides.clear()
 

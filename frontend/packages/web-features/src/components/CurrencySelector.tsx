@@ -12,7 +12,30 @@ import {
   useT,
 } from '@beecount/ui'
 
-import { CURRENCY_REGION_GROUPS, currencyDisplayName } from '../lib/currencies'
+import * as CountryFlags from 'country-flag-icons/react/3x2'
+
+import {
+  CURRENCY_REGION_GROUPS,
+  countryCodeForCurrency,
+  currencyDisplayName,
+} from '../lib/currencies'
+
+type FlagComp = React.FC<{ className?: string; title?: string }>
+const _flags = CountryFlags as unknown as Record<string, FlagComp | undefined>
+
+/** 币种国旗(区域货币无国旗 → null,调用处用符号占位)。 */
+function CurrencyFlag({ code }: { code: string }) {
+  const country = countryCodeForCurrency(code)
+  const Flag = country ? _flags[country] : undefined
+  if (!Flag) {
+    return (
+      <span className="flex h-3.5 w-5 shrink-0 items-center justify-center rounded-[4px] bg-muted text-[8px] font-semibold text-muted-foreground">
+        {code.slice(0, 2)}
+      </span>
+    )
+  }
+  return <Flag className="h-3.5 w-5 shrink-0 rounded-[4px]" title={code} />
+}
 
 type CurrencySelectorProps = {
   open: boolean
@@ -25,6 +48,10 @@ type CurrencySelectorProps = {
   /** 是否只读 — 只展示当前货币不让换。例如"账户已有交易"场景。 */
   readOnly?: boolean
   readOnlyHint?: string
+  /** v30 多币种:各币种对 rateBase 的汇率(1 该币种 = value rateBase),
+   *  传入则每行展示汇率。调用方拉 /read/exchange-rates 提供。 */
+  ratesToBase?: Record<string, number>
+  rateBase?: string
 }
 
 /**
@@ -46,6 +73,8 @@ export function CurrencySelector({
   title,
   readOnly,
   readOnlyHint,
+  ratesToBase,
+  rateBase,
 }: CurrencySelectorProps) {
   const t = useT()
   const { locale } = useLocale()
@@ -131,13 +160,24 @@ export function CurrencySelector({
                             setQuery('')
                             onClose()
                           }}
-                          className={`flex items-center justify-between rounded-md border px-3 py-2 text-left text-sm transition-colors disabled:cursor-not-allowed disabled:opacity-60 ${
+                          className={`flex items-center gap-2 rounded-md border px-3 py-2 text-left text-sm transition-colors disabled:cursor-not-allowed disabled:opacity-60 ${
                             selected
                               ? 'border-primary/60 bg-primary/10 text-primary'
                               : 'border-border/60 hover:bg-accent/40'
                           }`}
                         >
-                          <span className="truncate">{display}</span>
+                          <CurrencyFlag code={code} />
+                          <span className="flex min-w-0 flex-1 flex-col">
+                            <span className="truncate">{display}</span>
+                            {rateBase &&
+                            code !== rateBase.toUpperCase() &&
+                            ratesToBase?.[code] != null ? (
+                              <span className="truncate text-[11px] text-muted-foreground">
+                                1 {code} ≈ {ratesToBase[code].toPrecision(4)}{' '}
+                                {rateBase.toUpperCase()}
+                              </span>
+                            ) : null}
+                          </span>
                           {selected ? <span aria-hidden>✓</span> : null}
                         </button>
                       )
@@ -172,6 +212,9 @@ type CurrencySelectorTriggerProps = {
   readOnlyHint?: string
   className?: string
   placeholder?: string
+  /** v30 多币种:透传给弹窗展示汇率(见 CurrencySelectorProps)。 */
+  ratesToBase?: Record<string, number>
+  rateBase?: string
 }
 
 export function CurrencySelectorTrigger({
@@ -181,6 +224,8 @@ export function CurrencySelectorTrigger({
   readOnlyHint,
   className,
   placeholder,
+  ratesToBase,
+  rateBase,
 }: CurrencySelectorTriggerProps) {
   const t = useT()
   const [open, setOpen] = useState(false)
@@ -204,7 +249,12 @@ export function CurrencySelectorTrigger({
           .filter(Boolean)
           .join(' ')}
       >
-        <span className={`truncate ${code ? '' : 'text-muted-foreground'}`}>{display}</span>
+        <span className="flex min-w-0 items-center gap-2">
+          {code ? <CurrencyFlag code={code} /> : null}
+          <span className={`truncate ${code ? '' : 'text-muted-foreground'}`}>
+            {display}
+          </span>
+        </span>
         <span className="text-xs text-muted-foreground opacity-60">▾</span>
       </button>
       <CurrencySelector
@@ -214,6 +264,8 @@ export function CurrencySelectorTrigger({
         onSelect={onChange}
         readOnly={readOnly}
         readOnlyHint={readOnlyHint}
+        ratesToBase={ratesToBase}
+        rateBase={rateBase}
       />
     </>
   )

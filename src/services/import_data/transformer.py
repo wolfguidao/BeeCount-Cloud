@@ -165,10 +165,19 @@ def _transform_row(row: ParsedRow, mapping: ImportFieldMapping) -> ImportTransac
         tx_category_name = cat_value
         tx_parent_name = None
 
+    # v30 多币种:币种列(可选,值须像 ISO code 才采纳,脏值回退 None → 本位币)
+    raw_currency = opt(mapping.currency)
+    currency_code = (
+        raw_currency.upper()
+        if raw_currency and re.fullmatch(r"[A-Za-z]{3,8}", raw_currency)
+        else None
+    )
+
     return ImportTransaction(
         tx_type=tx_type,
         amount=amount,
         happened_at=dt,
+        currency_code=currency_code,
         note=opt(mapping.note),
         category_name=tx_category_name,
         parent_category_name=tx_parent_name,

@@ -185,6 +185,10 @@ export type ReadTransaction = {
   exclude_from_stats?: boolean
   /** 不计入预算用量(仅 expense 有意义)。历史交易默认 false。 */
   exclude_from_budget?: boolean
+  /** 交易原币种(ISO)。历史交易可能为 null,视作账本本位币。 */
+  currency_code?: string | null
+  /** 折账本本位币的金额快照(记账时汇率,保存即定)。null 时 fallback 用 amount。 */
+  native_amount?: number | null
   last_change_id: number
   ledger_id?: string | null
   ledger_name?: string | null
@@ -537,6 +541,10 @@ export type TxPayload = {
   tx_type: 'expense' | 'income' | 'transfer'
   amount: number
   happened_at: string
+  /** 交易级多币种(0018):原币种;不传 = 账本本位币(不产生字段)。 */
+  currency_code?: string | null
+  /** 折账本本位币的金额快照(前端按 server 汇率算好传入)。 */
+  native_amount?: number | null
   note?: string | null
   category_name?: string | null
   category_kind?: 'expense' | 'income' | 'transfer' | null

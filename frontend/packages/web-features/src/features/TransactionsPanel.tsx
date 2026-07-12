@@ -28,6 +28,7 @@ import type {
   WorkspaceCategory,
 } from '@beecount/api-client'
 
+import { CurrencySelectorTrigger } from '../components/CurrencySelector'
 import { CategoryPickerDialog } from '../components/CategoryPickerDialog'
 import { CategoryIcon } from '../components/CategoryIcon'
 import { TagPickerDialog } from '../components/TagPickerDialog'
@@ -37,6 +38,10 @@ import type { TxForm } from '../forms'
 
 type TransactionsPanelProps = {
   form: TxForm
+  /** 账本本位币(大写 ISO)。币种下拉默认值;选=本位币时 form.currency 存 ''。 */
+  baseCurrency?: string
+  /** v30 多币种:各币种对 baseCurrency 的汇率(1 quote ≈ x base),透传币种选择弹窗展示。 */
+  currencyRates?: Record<string, number>
   rows: ReadTransaction[]
   total: number
   page: number
@@ -230,6 +235,8 @@ function AttachmentCarouselCell({
 
 export function TransactionsPanel({
   form,
+  baseCurrency = 'CNY',
+  currencyRates,
   rows,
   total,
   page,
@@ -323,11 +330,14 @@ export function TransactionsPanel({
 
   const applyTxType = (nextType: TxForm['tx_type']) => {
     if (nextType === 'transfer') {
-      // 转账两个标记都隐藏 → 清掉,避免残留脏值
+      // 转账两个标记都隐藏 → 清掉,避免残留脏值。
+      // currency 一并清空:转账不支持跨币种且币种控件隐藏,不清会把转出/
+      // 转入账户下拉锁死在之前手选的外币过滤里(审查发现)。
       onFormChange({
         ...form,
         tx_type: nextType,
         account_name: '',
+        currency: '',
         category_name: '',
         category_kind: 'transfer',
         exclude_from_stats: false,
@@ -430,6 +440,26 @@ export function TransactionsPanel({
                 value={form.amount}
                 onChange={(e) => onFormChange({ ...form, amount: e.target.value })}
               />
+              {/* v30 多币种:币种另起一行,全宽显示币种全名+国旗(挨金额太窄会截断);
+                  选非本位币 → 账户下拉按币种过滤 + 已选账户清空(币种优先联动,
+                  transfer 不支持)。 */}
+              {form.tx_type !== 'transfer' ? (
+                <CurrencySelectorTrigger
+                  value={form.currency || baseCurrency}
+                  onChange={(code) =>
+                    onFormChange({
+                      ...form,
+                      currency:
+                        code.toUpperCase() === baseCurrency.toUpperCase()
+                          ? ''
+                          : code,
+                      account_name: ''
+                    })
+                  }
+                  ratesToBase={currencyRates}
+                  rateBase={baseCurrency}
+                />
+              ) : null}
             </div>
             <div className="space-y-1">
               <Label>{t('transactions.table.time')}</Label>
@@ -525,7 +555,7 @@ export function TransactionsPanel({
               </>
             ) : (
               <div className="space-y-1">
-                <Label>{t('accounts.title')}</Label>
+                <Label>{t('transactions.table.account')}</Label>
                 <Select
                   // Radix SelectItem 不允许 value=""(undefined-state 由 placeholder
                   // 渲染),所以用 sentinel "__none__" 表示"不选账户"。和 form 的

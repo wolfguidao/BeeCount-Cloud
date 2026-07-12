@@ -57,6 +57,17 @@ def _as_float(v: Any) -> float:
         return 0.0
 
 
+def _as_float_or_none(v: Any) -> float | None:
+    """同 _as_float 但保留 NULL 语义(native_amount 缺失必须落 NULL,
+    统计端靠 NULL 触发 COALESCE 回退 amount;默认 0.0 会把统计清零)。"""
+    if v is None:
+        return None
+    try:
+        return float(v)
+    except (TypeError, ValueError):
+        return None
+
+
 def _as_int(v: Any, default: int = 0) -> int:
     if v is None:
         return default
@@ -254,6 +265,10 @@ def upsert_tx(
         # 负责(payload 已含既有行值),这里只做布尔强转;default=False 兜底首次插入。
         "exclude_from_stats": _as_bool(payload.get("excludeFromStats"), default=False),
         "exclude_from_budget": _as_bool(payload.get("excludeFromBudget"), default=False),
+        # 交易级多币种(0018):缺键保留由上游 merge_with_existing 负责;首次
+        # 插入且旧 payload 无字段 → NULL(统计端 COALESCE 回退 amount)。
+        "currency_code": _as_str(payload.get("currencyCode")),
+        "native_amount": _as_float_or_none(payload.get("nativeAmount")),
         "source_change_id": source_change_id,
     }
 

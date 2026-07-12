@@ -72,6 +72,8 @@ class FieldMappingPayload(BaseModel):
     from_account_name: str | None = None
     to_account_name: str | None = None
     note: str | None = None
+    # v30 多币种:币种列(可选)
+    currency: str | None = None
     tags: list[str] = Field(default_factory=list)
     datetime_format: str | None = None
     strip_currency_symbols: bool = True
@@ -91,6 +93,7 @@ class FieldMappingPayload(BaseModel):
             from_account_name=self.from_account_name,
             to_account_name=self.to_account_name,
             note=self.note,
+            currency=self.currency,
             tags=list(self.tags),
             datetime_format=self.datetime_format,
             strip_currency_symbols=self.strip_currency_symbols,
@@ -110,6 +113,7 @@ def _mapping_to_payload(m: ImportFieldMapping) -> dict:
         "from_account_name": m.from_account_name,
         "to_account_name": m.to_account_name,
         "note": m.note,
+        "currency": m.currency,
         "tags": list(m.tags),
         "datetime_format": m.datetime_format,
         "strip_currency_symbols": m.strip_currency_symbols,
@@ -819,6 +823,11 @@ def _build_tx_payload(tx, auto_tags: list[str], actor_base: dict) -> dict:
         "amount": float(tx.amount),
         "happened_at": tx.happened_at.isoformat(),
         "note": tx.note,
+        # v30 多币种:CSV 币种列 → snapshot item 的 currencyCode。
+        # native_amount 有意不填:统计端 COALESCE 回退 amount(1:1),
+        # App pull 后 L11 横幅可按当前汇率补折算 —— 导入端点内不做外部
+        # 汇率 HTTP 调用(稳定性)。
+        "currency_code": tx.currency_code,
         "category_name": tx.category_name,
         "category_kind": tx.tx_type if tx.tx_type != "transfer" else None,
         "account_name": tx.account_name,

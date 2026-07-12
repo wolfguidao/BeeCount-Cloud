@@ -17,6 +17,8 @@ _PATTERNS: dict[str, re.Pattern[str]] = {
     "tx_type": re.compile(r"^(类型|type|kind|收[/／]?支|收支)$", re.I),
     # 金额:含 alipay 的"金额(元)"
     "amount": re.compile(r"(金额|amount|amt|价格|price|总金额|发生额|sum|total)", re.I),
+    # v30 多币种:币种列(整列名严格匹配,避免误吃"货币基金"之类)
+    "currency": re.compile(r"^(币种|幣種|货币|貨幣|currency|currency\s*code)$", re.I),
     # 时间:含 alipay 的"交易创建时间"/ wechat 的"交易时间"
     "happened_at": re.compile(
         r"(交易时间|交易创建时间|创建时间|发生时间|happened|时间|日期|date|when)",
@@ -95,6 +97,7 @@ class GenericParser:
         return ImportFieldMapping(
             tx_type=grab("tx_type"),
             amount=grab("amount"),
+            currency=grab("currency"),
             happened_at=grab("happened_at"),
             category_name=grab("category_name"),
             subcategory_name=grab("subcategory_name"),

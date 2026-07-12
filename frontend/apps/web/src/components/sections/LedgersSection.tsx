@@ -1,4 +1,4 @@
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
 
 import { BarChart3, Pencil, Trash2, TrendingDown, TrendingUp, Upload, UserPlus, Users } from 'lucide-react'
@@ -23,9 +23,11 @@ import {
   Amount,
   CurrencySelectorTrigger,
   formatIsoDateTime,
+  loadRatesToBase,
 } from '@beecount/web-features'
 
 import { useLedgers } from '../../context/LedgersContext'
+import { useAuth } from '../../context/AuthContext'
 import { JoinSharedLedgerDialog } from '../JoinSharedLedgerDialog'
 import { SharedLedgerManageDialog } from '../SharedLedgerManageDialog'
 import { SharedLedgerStatsDialog } from '../SharedLedgerStatsDialog'
@@ -418,7 +420,23 @@ export function LedgerEditDialog({
   meta,
 }: LedgerEditDialogProps) {
   const t = useT()
+  const { token } = useAuth()
   const [submitting, setSubmitting] = useState(false)
+  // v30 多币种:币种选择弹窗展示各币种对账本主币种的汇率(1 该币种 ≈ x 主币种,含手动 override)。
+  const rateBase = (form.currency || 'CNY').toUpperCase()
+  const [ratesToBase, setRatesToBase] = useState<Record<string, number>>({})
+  useEffect(() => {
+    if (!open || !token) return
+    let cancelled = false
+    loadRatesToBase(token, rateBase)
+      .then((m) => {
+        if (!cancelled) setRatesToBase(m)
+      })
+      .catch(() => {})
+    return () => {
+      cancelled = true
+    }
+  }, [open, rateBase, token])
   const handleSubmit = async () => {
     setSubmitting(true)
     try {
@@ -450,6 +468,8 @@ export function LedgerEditDialog({
             <CurrencySelectorTrigger
               value={form.currency || 'CNY'}
               onChange={(code) => onChange({ ...form, currency: code })}
+              ratesToBase={ratesToBase}
+              rateBase={rateBase}
             />
           </div>
           <div className="space-y-1">

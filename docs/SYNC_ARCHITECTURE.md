@@ -267,6 +267,14 @@ budget 时 500 `ModuleNotFoundError`。现在合并成表驱动的 `_MERGE_SPECS
 一个 `merge_with_existing`,新增 entity 只加一条 spec,不可能再漏 import
 或复制粘贴错字段。
 
+**transaction 的 merge 有一个 per-entity 后处理特例**
+(`_sync_native_amount_after_merge`,交易级多币种 0018):payload 带新
+`amount` 但不带 `nativeAmount`(旧客户端只知道原币金额)时,merge 从
+existing 补回的旧 `nativeAmount` 会与新 amount 失配 → 后处理按该笔隐含
+汇率联动(同币种跟随 / 外币等比缩放)。Web 写路径的对应联动在
+`snapshot_mutator.update_transaction` 的 amount 分支(L14)。两处逻辑
+必须保持一致 —— 改一处记得看另一处。
+
 ### 4.6 change_id 单调性
 
 `sync_changes.change_id` 是 autoincrement,**严格全局递增**。

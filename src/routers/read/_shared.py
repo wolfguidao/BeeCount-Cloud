@@ -428,30 +428,54 @@ def _to_utc(dt: datetime) -> datetime:
 
 def _projection_totals(
     db: Session, ledger_internal_id: str
-) -> tuple[int, float, float, datetime | None]:
+) -> tuple[int, float, float, float, datetime | None]:
     """从 read_tx_projection 聚合出 (count, income_total, expense_total, latest)。
-    SQLite / PostgreSQL 通用:用 SQLAlchemy 的 `case` 做条件 sum。"""
-    from sqlalchemy import case as sa_case
+    SQLite / PostgreSQL 通用:用 SQLAlchemy 的 `case` 做条件 sum。
 
+    账本维度口径(交易级多币种,0018):折账本本位币,读 native_amount,
+    NULL(旧 App 推的 / 存量)回退 amount。单币种账本 native==amount,结果不变。
+    账户维度(workspace/accounts 按 account_sync_id 聚合)仍读 amount 原币,不要仿此改。
+
+    收支 SUM 排除 exclude_from_stats=True 的标记笔(#340 D1,补 0017 的遗漏:
+    此前只有 analytics 过滤了,账本卡片没过滤 → 两处统计对不上)。tx_count /
+    latest 不过滤 —— D1 语义:标记只排收支金额,仍计入账单列表与笔数。
+
+    返回 (count, income_ex, expense_ex, balance_all, latest):balance_all 是
+    **不排除**标记笔的收支差 —— 「余额=钱的位置」必须含标记笔(D5,与 App
+    getLedgerStats 口径一致),否则跨端余额对不上。"""
+    from sqlalchemy import case as sa_case
+    from sqlalchemy import false as sa_false
+
+    _native = func.coalesce(ReadTxProjection.native_amount, ReadTxProjection.amount)
+    _counted = ReadTxProjection.exclude_from_stats == sa_false()
     row = db.execute(
         select(
             func.count(ReadTxProjection.sync_id),
             func.coalesce(func.sum(
-                sa_case((ReadTxProjection.tx_type == "income", ReadTxProjection.amount),
+                sa_case(((ReadTxProjection.tx_type == "income") & _counted, _native),
                         else_=0.0)
             ), 0.0),
             func.coalesce(func.sum(
-                sa_case((ReadTxProjection.tx_type == "expense", ReadTxProjection.amount),
+                sa_case(((ReadTxProjection.tx_type == "expense") & _counted, _native),
                         else_=0.0)
+            ), 0.0),
+            # balance_all:不排除标记笔(D5「余额=钱的位置」)
+            func.coalesce(func.sum(
+                sa_case(
+                    (ReadTxProjection.tx_type == "income", _native),
+                    (ReadTxProjection.tx_type == "expense", -_native),
+                    else_=0.0,
+                )
             ), 0.0),
             func.max(ReadTxProjection.happened_at),
         ).where(ReadTxProjection.ledger_id == ledger_internal_id)
     ).one()
-    tx_count, income_total, expense_total, latest_raw = row
+    tx_count, income_total, expense_total, balance_all, latest_raw = row
     return (
         int(tx_count or 0),
         float(income_total or 0),
         float(expense_total or 0),
+        float(balance_all or 0),
         _to_utc(latest_raw) if latest_raw else None,
     )
 

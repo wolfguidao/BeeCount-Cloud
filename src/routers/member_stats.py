@@ -85,18 +85,25 @@ def get_member_stats(
         month_start_day=ledger.month_start_day or 1,
     )
 
-    # GROUP BY created_by_user_id 一次聚合 income / expense / tx_count
+    # GROUP BY created_by_user_id 一次聚合 income / expense / tx_count。
+    # 账本维度(单账本内跨成员/账户求和,响应按 ledger_currency 展示)→ 折
+    # 账本本位币 native_amount(?? amount);排除「不计收支」标记笔,与
+    # _projection_totals/analytics/标签聚合口径一致(否则多币种共享账本里
+    # 成员金额错、排序错、与账本卡片对不上)。
+    from sqlalchemy import false as sa_false
+
+    _native = func.coalesce(ReadTxProjection.native_amount, ReadTxProjection.amount)
     q = select(
         ReadTxProjection.created_by_user_id,
         func.sum(
             case(
-                (ReadTxProjection.tx_type == "income", ReadTxProjection.amount),
+                (ReadTxProjection.tx_type == "income", _native),
                 else_=0.0,
             )
         ).label("income_total"),
         func.sum(
             case(
-                (ReadTxProjection.tx_type == "expense", ReadTxProjection.amount),
+                (ReadTxProjection.tx_type == "expense", _native),
                 else_=0.0,
             )
         ).label("expense_total"),
@@ -105,6 +112,7 @@ def get_member_stats(
         ReadTxProjection.ledger_id == ledger.id,
         ReadTxProjection.tx_type.in_(("income", "expense")),  # 跳过 transfer
         ReadTxProjection.created_by_user_id.is_not(None),
+        ReadTxProjection.exclude_from_stats == sa_false(),
     )
     if start_at is not None:
         q = q.where(ReadTxProjection.happened_at >= start_at)

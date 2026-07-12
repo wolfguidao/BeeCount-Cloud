@@ -73,6 +73,8 @@ class ImportFieldMapping:
     from_account_name: str | None = None
     to_account_name: str | None = None
     note: str | None = None
+    # v30 多币种:币种列(可选)。值须像 ISO code(3-8 位字母)才被采纳。
+    currency: str | None = None
     tags: list[str] = field(default_factory=list)
     # transformer 选项
     datetime_format: str | None = None
@@ -119,6 +121,8 @@ class ImportTransaction:
     tx_type: Literal["expense", "income", "transfer"]
     amount: Decimal
     happened_at: datetime
+    # v30 多币种:交易原币种(CSV 币种列;None = 账本本位币,payload 不产字段)
+    currency_code: str | None = None
     note: str | None = None
     category_name: str | None = None
     parent_category_name: str | None = None

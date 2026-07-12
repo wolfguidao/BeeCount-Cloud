@@ -197,6 +197,11 @@ _LEDGER_MERGE_SPECS: dict[str, _MergeSpec] = {
         # 布尔强转在 projection.upsert_tx(default=False)做。
         ("excludeFromStats", "exclude_from_stats"),
         ("excludeFromBudget", "exclude_from_budget"),
+        # 交易级多币种(0018):缺键保留既有折算快照(旧 App 改备注不丢折算);
+        # payload 带 amount 不带 nativeAmount 时的联动缩放见
+        # _sync_native_amount_after_merge。
+        ("currencyCode", "currency_code"),
+        ("nativeAmount", "native_amount"),
     ]),
 }
 
@@ -426,6 +431,35 @@ def _merge_from_spec(spec: _MergeSpec, existing, payload: dict) -> dict:
     return {**base, **{k: v for k, v in payload.items() if v is not None}}
 
 
+def _sync_native_amount_after_merge(existing, payload: dict, merged: dict) -> dict:
+    """交易级多币种(0018):payload 带新 amount 但不带 nativeAmount(旧客户端
+    只知道原币金额)时,merge 从 existing 补回的旧 native_amount 会与新 amount
+    失配(账本统计显示旧折算值)。联动规则(与 snapshot_mutator L14 一致):
+
+    - amount 未变 → 保留旧折算(merge 已补,即快照保护,不动)
+    - 同币种 / 未折算(old_native == old_amount,隐含汇率 1)→ 跟随新 amount
+    - 外币 → 按该笔隐含汇率等比缩放(保持记账时汇率)
+    - old_amount == 0 无法推汇率 → 退化 = 新 amount(1:1,App 端 L11 可捞回)
+    """
+    if payload.get("amount") is None or payload.get("nativeAmount") is not None:
+        return merged
+    old_native = getattr(existing, "native_amount", None)
+    if old_native is None:
+        return merged
+    try:
+        new_amount = float(payload["amount"])
+        old_amount = float(getattr(existing, "amount", 0.0) or 0.0)
+    except (TypeError, ValueError):
+        return merged
+    if new_amount == old_amount:
+        return merged
+    from .snapshot_mutator import rescale_native_amount
+
+    merged["nativeAmount"] = rescale_native_amount(
+        old_amount, old_native, new_amount)
+    return merged
+
+
 def merge_with_existing(
     db: Session,
     entity_type: str,
@@ -447,7 +481,10 @@ def merge_with_existing(
     )
     if existing is None:
         return payload
-    return _merge_from_spec(spec, existing, payload)
+    merged = _merge_from_spec(spec, existing, payload)
+    if entity_type == "transaction":
+        merged = _sync_native_amount_after_merge(existing, payload, merged)
+    return merged
 
 
 def merge_with_existing_user(

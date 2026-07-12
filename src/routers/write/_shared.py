@@ -892,6 +892,15 @@ def _projection_row_to_tx_dict(row: ReadTxProjection) -> dict[str, Any]:
     # 保留原值,且新 SyncChange payload 用 camelCase 携带它们。
     item["excludeFromStats"] = bool(row.exclude_from_stats)
     item["excludeFromBudget"] = bool(row.exclude_from_budget)
+    # v30 交易级多币种:必须带上两字段(与 snapshot_builder.build 对齐)。这是
+    # web PATCH update_tx 快路径的 prev_item —— 漏了它,mutator 的 rescale
+    # 守卫(nativeAmount in item)永不触发,upsert 会把外币交易的 currency_code/
+    # native_amount 写成 NULL,所有账本维度 coalesce 回退 amount → 折算被抹掉
+    # 并同步给 mobile。NULL 不产生 key(统计端 COALESCE 兜底)。
+    if row.currency_code is not None:
+        item["currencyCode"] = row.currency_code
+    if row.native_amount is not None:
+        item["nativeAmount"] = row.native_amount
     return item
 
 

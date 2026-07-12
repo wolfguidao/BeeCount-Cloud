@@ -29,6 +29,7 @@ from ...models import (
     ReadTxProjection,
     UserAccountProjection,
     UserCategoryProjection,
+    UserExchangeRateProjection,
     UserTagProjection,
     User,
 )
@@ -149,8 +150,12 @@ async def create_transaction(
     note: str | None = None,
     tags: list[str] | None = None,
     ledger_id: str | None = None,
+    currency: str | None = None,
 ) -> dict[str, Any]:
-    """新建一笔交易。category / account 用名字。happened_at 不传 = 当前时间。"""
+    """新建一笔交易。category / account 用名字。happened_at 不传 = 当前时间。
+
+    currency(v30 多币种):记外币时传 ISO code(如 USD/JPY)。不传则:有账户
+    随账户币种、无账户随账本主币种。外币会按当前汇率折算到账本主币种。"""
     if tx_type not in {"expense", "income", "transfer"}:
         raise ValueError(f"Invalid tx_type: {tx_type}")
     if amount <= 0:
@@ -169,6 +174,8 @@ async def create_transaction(
         ledger_external_id = led.external_id
         ledger_name = led.name
         led_internal_id = led.id  # 出 with 块后 led 会 detach,提前取值
+        ledger_base_ccy = (led.currency or "CNY").strip().upper()  # v30 折算基准
+        acc_ccy = _account_currency(db, user.id, account) if account else None
         mcp_tag_missing = _is_tag_missing_in_ledger(
             db, user_id=user.id, ledger_id=led_internal_id, tag_name=_MCP_DEFAULT_TAG,
         )
@@ -207,6 +214,13 @@ async def create_transaction(
         )
     if tag_ids:
         body["tag_ids"] = tag_ids
+
+    # v30 多币种:非转账才折算(转账币种恒=账户币种,本阶段不支持跨币种转账)
+    if tx_type != "transfer":
+        body.update(await _build_currency_fields(
+            user, ledger_base=ledger_base_ccy, account_currency=acc_ccy,
+            currency_arg=currency, amount=float(amount),
+        ))
 
     settings = get_settings()
     path = f"{settings.api_prefix}/write/ledgers/{ledger_external_id}/transactions"
@@ -444,6 +458,7 @@ async def create_transactions(
         ledger_external_id = led.external_id
         ledger_name = led.name
         led_internal_id = led.id
+        batch_ledger_base = (led.currency or "CNY").strip().upper()  # v30 折算基准
 
     # 2. 规范化每笔 + 基础校验;收集要校验的 category / account 名
     norm_items: list[dict[str, Any]] = []
@@ -479,6 +494,10 @@ async def create_transactions(
             acc_needed.add(str(account))
         # 用户 tags ∪ MCP 默认标签;batch 端点按名建实体 / 反查 sync_id。
         item["tags"] = _merge_default_tag(raw.get("tags"))
+        # v30 多币种:暂存本笔的显式币种 + 账户名,第 3.5 步统一折算
+        item["__ccy_arg"] = (str(raw["currency"]).strip().upper()
+                             if raw.get("currency") else None)
+        item["__acc_name"] = str(account) if account else None
         norm_items.append(item)
 
     # 3. 预校验 category / account 名是否存在(O(1) 查询,给 LLM 清晰报错,
@@ -488,6 +507,38 @@ async def create_transactions(
         mcp_tag_missing = _is_tag_missing_in_ledger(
             db, user_id=user.id, ledger_id=led_internal_id, tag_name=_MCP_DEFAULT_TAG,
         )
+
+    # 3.5 v30 多币种折算:预取涉及账户的币种 map,逐笔定币种 + 折 native。
+    #     account_currency 走 map(不逐笔查库);_build_currency_fields 内部
+    #     只在外币时才拉汇率(fetcher 有 server 端缓存,同 base 复用)。
+    if acc_needed:
+        with SessionLocal() as db:
+            acc_ccy_map = {
+                name: (
+                    db.scalar(
+                        select(UserAccountProjection.currency).where(
+                            UserAccountProjection.user_id == user.id,
+                            UserAccountProjection.name == name,
+                        ).limit(1)
+                    ) or ""
+                ).strip().upper() or None
+                for name in acc_needed
+            }
+    else:
+        acc_ccy_map = {}
+    for item in norm_items:
+        ccy_arg = item.pop("__ccy_arg", None)
+        acc_name = item.pop("__acc_name", None)
+        if item["tx_type"] == "transfer":
+            continue  # 转账不折算(同币种守卫)
+        fields = await _build_currency_fields(
+            user,
+            ledger_base=batch_ledger_base,
+            account_currency=acc_ccy_map.get(acc_name),
+            currency_arg=ccy_arg,
+            amount=item["amount"],
+        )
+        item.update(fields)
 
     # 4. 确保 MCP tag 实体存在(带专属颜色),batch 端点随后复用同名 tag。
     if mcp_tag_missing:
@@ -723,6 +774,72 @@ def _lookup_category_sync_id(db, user_id: str, name: str | None, tx_type: str | 
     if row is None:
         raise ValueError(f"Category not found: {name}")
     return row.sync_id
+
+
+def _account_currency(db, user_id: str, name: str | None) -> str | None:
+    """账户名 → 币种(大写)。查不到返回 None。"""
+    if not name:
+        return None
+    row = db.scalar(
+        select(UserAccountProjection.currency)
+        .where(
+            UserAccountProjection.user_id == user_id,
+            UserAccountProjection.name == name,
+        )
+        .limit(1)
+    )
+    return (row or "").strip().upper() or None
+
+
+async def _build_currency_fields(
+    user: User,
+    *,
+    ledger_base: str,
+    account_currency: str | None,
+    currency_arg: str | None,
+    amount: float,
+) -> dict[str, Any]:
+    """v30 交易级多币种:MCP 记账时定交易币种 + 折账本本位币快照。
+
+    币种优先级:显式 currency 参数 > 账户币种 > 账本本位币(与 App 一致)。
+    折算方向:手动 override(1 quote = rate base,乘) > 自动源 fetcher
+    (1 base = x quote,除),缺汇率退化 =amount(1:1,currency_code 仍落,
+    Web 改主币种重算 / App L11 横幅可捞回)。返回要并进 body 的字段 dict。
+    """
+    base = ledger_base.strip().upper()
+    cc = (currency_arg or account_currency or base).strip().upper()
+    if cc == base:
+        # 本位币:body 不带两字段(server 落 NULL,统计 COALESCE 回退 amount)
+        return {}
+    # override 优先(user-global,同步表)
+    with SessionLocal() as db:
+        ov = db.scalar(
+            select(UserExchangeRateProjection.rate).where(
+                UserExchangeRateProjection.user_id == user.id,
+                UserExchangeRateProjection.base_currency == base,
+                UserExchangeRateProjection.quote_currency == cc,
+            ).limit(1)
+        )
+    native: float | None = None
+    if ov is not None:
+        try:
+            r = float(ov)
+            if r > 0:
+                native = amount * r  # 1 cc = r base
+        except (TypeError, ValueError):
+            native = None
+    if native is None:
+        # 自动源(server 汇率代理);拉不到就退化 1:1
+        try:
+            from ...services.exchange_rate import fetcher as _rf
+            with SessionLocal() as db:
+                row, _stale = await _rf.get_rates(db, base)
+            raw = dict(row.payload_json).get(cc) or dict(row.payload_json).get(cc.lower())
+            x = float(raw) if raw is not None else 0.0
+            native = amount / x if x > 0 else amount  # 1 base = x cc → cc 折 base 要除
+        except Exception:
+            native = amount
+    return {"currency_code": cc, "native_amount": native}
 
 
 def _lookup_account_sync_id(db, user_id: str, name: str | None) -> str | None:

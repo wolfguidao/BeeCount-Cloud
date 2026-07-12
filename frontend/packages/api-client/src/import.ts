@@ -13,6 +13,8 @@ import { ApiError, extractApiError } from './errors'
 export type ImportSourceFormat = 'beecount' | 'alipay' | 'wechat' | 'generic'
 
 export type ImportFieldMapping = {
+  /** v30 多币种:币种列(可选,值须像 ISO code)。 */
+  currency?: string | null
   tx_type: string | null
   amount: string | null
   happened_at: string | null

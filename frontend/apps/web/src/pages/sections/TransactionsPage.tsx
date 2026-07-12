@@ -81,6 +81,8 @@ import {
 } from '@beecount/api-client'
 
 import {
+  resolveCurrencyFields,
+  loadRatesToBase,
   CategoryPickerDialog,
   ConfirmDialog,
   TagPickerDialog,
@@ -481,6 +483,20 @@ export function TransactionsPage() {
     const hit = ledgers.find((ledger) => ledger.ledger_id === (txWriteLedgerId || activeLedgerId))
     return (hit?.currency || 'CNY').trim().toUpperCase()
   }, [ledgers, txWriteLedgerId, activeLedgerId])
+  // v30 多币种:币种选择弹窗展示各币种对账本主币种的汇率(弹窗开时拉,5min 缓存)。
+  const [txCurrencyRates, setTxCurrencyRates] = useState<Record<string, number>>({})
+  useEffect(() => {
+    if (!token || !txDialogOpen) return
+    let cancelled = false
+    loadRatesToBase(token, txWriteLedgerCurrency)
+      .then((m) => {
+        if (!cancelled) setTxCurrencyRates(m)
+      })
+      .catch(() => {})
+    return () => {
+      cancelled = true
+    }
+  }, [token, txDialogOpen, txWriteLedgerCurrency])
   // §7 共享账本:当前编辑/查看的账本若是共享账本(Editor 视角),走独立
   // SharedLedgerResources state(Owner 的 user-global 资源镜像),否则走
   // 用户自己的 user-global 字典。逻辑对齐 mobile picker filter。
@@ -500,18 +516,21 @@ export function TransactionsPage() {
     [sharedBundle],
   )
 
+  // v30 多币种(币种优先联动):账户下拉按表单所选币种过滤(默认=账本本位币,
+  // 与旧行为一致;选了 JPY → 只显示 JPY 账户)。
+  const txFormCurrency = (txForm.currency || txWriteLedgerCurrency).toUpperCase()
   const txWriteAccounts = useMemo(() => {
     const source =
       txIsSharedEditor && sharedBundle ? sharedAsRead.accounts : txDictionaryAccounts
     return source.filter((row) => {
       const currency = (row.currency || 'CNY').trim().toUpperCase()
-      if (currency !== txWriteLedgerCurrency) return false
+      if (currency !== txFormCurrency) return false
       if (VALUATION_ACCOUNT_TYPES.has(row.account_type || '')) return false
       return true
     })
   }, [
     txDictionaryAccounts,
-    txWriteLedgerCurrency,
+    txFormCurrency,
     VALUATION_ACCOUNT_TYPES,
     txIsSharedEditor,
     sharedBundle,
@@ -1412,6 +1431,28 @@ export function TransactionsPage() {
         .map((value) => tagByName.get(value.trim().toLowerCase()))
         .filter((value): value is string => Boolean(value))
 
+      // v30 多币种:共享 helper(手动 override > 自动源;编辑模式币种未变
+      // 返回 null 不发字段 —— 金额变化由 server L14 按隐含汇率联动,避免
+      // 「只改备注被今日汇率重算」的快照漂移;改回本位币显式发 base+amount)。
+      // 拉不到汇率阻断保存(绝不静默 1:1,与 App L8 一致)。transfer 不带。
+      let currencyFields: { currency_code?: string; native_amount?: number } = {}
+      const submitAmount = Number(txForm.amount || 0)
+      if (!isTransfer) {
+        try {
+          const resolved = await resolveCurrencyFields({
+            token,
+            ledgerBase: txWriteLedgerCurrency,
+            currency: txFormCurrency,
+            amount: submitAmount,
+            originalCurrency: txForm.editingId ? txForm.original_currency : undefined
+          })
+          if (resolved) currencyFields = resolved
+        } catch {
+          setErrorNotice(t('transactions.error.rateMissing'))
+          return false
+        }
+      }
+
       const payload = {
         tx_type: txForm.tx_type,
         amount: Number(txForm.amount || 0),
@@ -1431,7 +1472,8 @@ export function TransactionsPage() {
         attachments: txForm.attachments.length > 0 ? txForm.attachments : null,
         // §三 标记按 type 条件落库:转账两者都 false;收入只允许 stats;支出两者都允许。
         exclude_from_stats: isTransfer ? false : txForm.exclude_from_stats,
-        exclude_from_budget: txForm.tx_type === 'expense' ? txForm.exclude_from_budget : false
+        exclude_from_budget: txForm.tx_type === 'expense' ? txForm.exclude_from_budget : false,
+        ...currencyFields
       }
       // eslint-disable-next-line no-console
       console.info('[tx-save] request', {
@@ -1669,11 +1711,14 @@ export function TransactionsPage() {
     [transactions, selectedTxIds],
   )
   // 已选合计金额:支出 - 收入(转账中性,不计入展示)。
+  // 跨账户合计属账本维度 → 折本位币口径:native_amount ?? amount(多币种账本
+  // 裸加原币会错;单币种 native===amount 结果不变)。
   const selectedTotalAmount = useMemo(() => {
     let sum = 0
     for (const t of selectedTxList) {
-      if (t.tx_type === 'expense') sum -= Number(t.amount) || 0
-      else if (t.tx_type === 'income') sum += Number(t.amount) || 0
+      const amt = Number(t.native_amount ?? t.amount) || 0
+      if (t.tx_type === 'expense') sum -= amt
+      else if (t.tx_type === 'income') sum += amt
     }
     return sum
   }, [selectedTxList])
@@ -1874,6 +1919,8 @@ export function TransactionsPage() {
                 />
               ) : null}
               <TransactionsPanel
+                baseCurrency={txWriteLedgerCurrency}
+                currencyRates={txCurrencyRates}
                 noteDisplayMode={profileMe?.appearance?.note_display_mode ?? 'category'}
                 selectionMode={selectionMode}
                 selectedIds={selectedTxIds}
@@ -1936,6 +1983,12 @@ export function TransactionsPage() {
                     account_name: tx.account_name || '',
                     from_account_name: tx.from_account_name || '',
                     to_account_name: tx.to_account_name || '',
+                    currency: (tx.currency_code || '').toUpperCase() === txWriteLedgerCurrency
+                      ? ''
+                      : (tx.currency_code || '').toUpperCase(),
+                    original_currency: (tx.currency_code || '').toUpperCase() === txWriteLedgerCurrency
+                      ? ''
+                      : (tx.currency_code || '').toUpperCase(),
                     tags:
                       tx.tags_list && tx.tags_list.length > 0
                         ? tx.tags_list

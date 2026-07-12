@@ -507,6 +507,11 @@ class ReadTxProjection(Base):
     exclude_from_budget: Mapped[bool] = mapped_column(
         Boolean, nullable=False, server_default=false(), default=False
     )
+    # 交易级多币种(0018,.docs/multi-currency-ledger):currency_code=原币种
+    # (NULL 视作账本本位币);native_amount=折账本本位币的金额快照(NULL 时
+    # 统计端 COALESCE 回退 amount)。账本维度统计读 native_amount,账户维度仍 amount。
+    currency_code: Mapped[str | None] = mapped_column(String(16), nullable=True)
+    native_amount: Mapped[float | None] = mapped_column(Float, nullable=True)
 
 
 Index(

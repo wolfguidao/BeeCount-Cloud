@@ -14,6 +14,12 @@ export type TxForm = {
   to_account_name: string
   tags: string[]
   attachments: AttachmentRef[]
+  /** 交易币种(v30 多币种):'' = 跟随账户/账本本位币;显式值 = 用户手选。
+   *  选了币种后账户下拉按该币种过滤(币种优先联动)。 */
+  currency: string
+  /** 编辑模式:该笔原币种(''=本位币)。提交时币种未变 → 不发字段,金额
+   *  变化由 server 按隐含汇率联动(防快照漂移);仅前端用,不进 payload。 */
+  original_currency: string
   /** 不计入收支统计(income/expense 显示开关,transfer 隐藏)。 */
   exclude_from_stats: boolean
   /** 不计入预算用量(仅 expense 显示开关)。 */
@@ -97,6 +103,8 @@ export const txDefaults = (): TxForm => ({
   to_account_name: '',
   tags: [],
   attachments: [],
+  currency: '',
+  original_currency: '',
   exclude_from_stats: false,
   exclude_from_budget: false
 })

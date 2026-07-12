@@ -286,7 +286,9 @@ def list_budgets(user: User, *, ledger_id: str | None = None) -> list[dict[str, 
         spent_by_cat: dict[str | None, float] = {}
         total_expense = 0.0
         tx_rows = db.execute(
-            select(ReadTxProjection.category_sync_id, func.sum(ReadTxProjection.amount))
+            # 账本维度折本位币口径(0018):native_amount ?? amount,与 /read 预算用量一致
+            select(ReadTxProjection.category_sync_id, func.sum(
+                func.coalesce(ReadTxProjection.native_amount, ReadTxProjection.amount)))
             .where(
                 ReadTxProjection.ledger_id == led.id,
                 ReadTxProjection.tx_type == "expense",
@@ -396,8 +398,14 @@ def get_analytics_summary(
         # scope == "all" 不加时间过滤
 
         rows = db.scalars(query).all()
-        income = sum(float(r.amount or 0) for r in rows if r.tx_type == "income")
-        expense = sum(float(r.amount or 0) for r in rows if r.tx_type == "expense")
+
+        # 账本维度折本位币口径(0018):native_amount ?? amount(多币种账本
+        # 裸加原币会错;单币种 native==amount 结果不变)。
+        def _native(r) -> float:
+            return float((r.native_amount if r.native_amount is not None else r.amount) or 0)
+
+        income = sum(_native(r) for r in rows if r.tx_type == "income")
+        expense = sum(_native(r) for r in rows if r.tx_type == "expense")
 
         # 分类排名 — 按支出金额 top 10
         cat_total: dict[str, float] = {}
@@ -405,7 +413,7 @@ def get_analytics_summary(
             if r.tx_type != "expense":
                 continue
             name = r.category_name or "(未分类)"
-            cat_total[name] = cat_total.get(name, 0) + float(r.amount or 0)
+            cat_total[name] = cat_total.get(name, 0) + _native(r)
         ranks = sorted(cat_total.items(), key=lambda x: -x[1])[:10]
 
         return {

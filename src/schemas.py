@@ -521,6 +521,10 @@ class ReadTransactionOut(BaseModel):
     # exclude_from_budget=不计入预算用量。两者独立,旧数据 default False。
     exclude_from_stats: bool = False
     exclude_from_budget: bool = False
+    # 交易级多币种(0018):currency_code=原币种(null 视作账本本位币);
+    # native_amount=折账本本位币快照(null 时前端 fallback 用 amount)。
+    currency_code: str | None = None
+    native_amount: float | None = None
     last_change_id: int
     ledger_id: str | None = None
     ledger_name: str | None = None
@@ -802,6 +806,10 @@ class WriteTransactionCreateRequest(WriteBaseRequest):
     # 账单标记(.docs/transaction-flags)。新建默认 False。
     exclude_from_stats: bool = False
     exclude_from_budget: bool = False
+    # 交易级多币种(0018):Web 币种录入。currency_code=原币种;native_amount=
+    # 折账本本位币快照(前端按汇率算好传入)。不传 → item 不产生字段(旧行为)。
+    currency_code: str | None = None
+    native_amount: float | None = None
 
 
 class WriteTransactionUpdateRequest(WriteBaseRequest):
@@ -824,6 +832,10 @@ class WriteTransactionUpdateRequest(WriteBaseRequest):
     # 账单标记(.docs/transaction-flags)。None = 不变(沿用 update 其它字段语义)。
     exclude_from_stats: bool | None = None
     exclude_from_budget: bool | None = None
+    # 交易级多币种(0018):显式传入优先(mutator 不再联动);None = 不变。
+    currency_code: str | None = None
+    native_amount: float | None = None
+
 
 
 class WriteEntityDeleteRequest(WriteBaseRequest):

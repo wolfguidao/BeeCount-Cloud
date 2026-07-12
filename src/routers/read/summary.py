@@ -18,14 +18,14 @@ def get_summary(
         ledger_external_id=ledger_id,
         is_admin=is_admin,
     )
-    tx_count, income_total, expense_total, latest_happened_at = _projection_totals(db, ledger.id)
+    tx_count, income_total, expense_total, balance_all, latest_happened_at = _projection_totals(db, ledger.id)
 
     return ReadSummaryOut(
         ledger_id=ledger_id,
         transaction_count=tx_count,
         income_total=income_total,
         expense_total=expense_total,
-        balance=income_total - expense_total,
+        balance=balance_all,
         latest_happened_at=latest_happened_at,
     )
 

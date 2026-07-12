@@ -207,3 +207,85 @@ def test_get_analytics_summary_empty_ledger(monkeypatch) -> None:
         assert summary["top_categories"] == []
     finally:
         app.dependency_overrides.clear()
+
+
+# ---------------------------------------------------------------------------
+# v30 交易级多币种:MCP 记账折算 helper(_build_currency_fields)
+# ---------------------------------------------------------------------------
+
+
+def test_mcp_currency_fields_base_currency_no_fields(monkeypatch) -> None:
+    """交易币种==账本本位币 → 不产生两字段(server 落 NULL,统计 COALESCE 回退)。"""
+    import asyncio
+    from src.mcp.tools import write_tools
+
+    client, sm = _make_client_and_engine(monkeypatch)
+    monkeypatch.setattr(write_tools, "SessionLocal", sm)
+    try:
+        reg = _register(client)
+        user = _fetch_user(sm, "tools@example.com")
+        fields = asyncio.run(write_tools._build_currency_fields(
+            user, ledger_base="CNY", account_currency="CNY",
+            currency_arg=None, amount=100.0,
+        ))
+        assert fields == {}
+    finally:
+        app.dependency_overrides.clear()
+
+
+def test_mcp_currency_fields_foreign_auto_rate(monkeypatch) -> None:
+    """外币无 override、走自动源:1 CNY = 0.14 USD(fetcher base→quote) →
+    12 USD 折 CNY = 12 / 0.14 ≈ 85.7(方向:quote 金额折 base 要除)。"""
+    import asyncio
+    from src.mcp.tools import write_tools
+    from src.services.exchange_rate import fetcher as rate_fetcher
+
+    client, sm = _make_client_and_engine(monkeypatch)
+    monkeypatch.setattr(write_tools, "SessionLocal", sm)
+
+    class _Row:
+        payload_json = {"USD": 0.14, "JPY": 20.0}
+
+    async def fake_get_rates(db, base):
+        assert base == "CNY"
+        return _Row(), False
+
+    monkeypatch.setattr(rate_fetcher, "get_rates", fake_get_rates)
+    try:
+        _register(client)
+        user = _fetch_user(sm, "tools@example.com")
+        fields = asyncio.run(write_tools._build_currency_fields(
+            user, ledger_base="CNY", account_currency="USD",
+            currency_arg=None, amount=12.0,
+        ))
+        assert fields["currency_code"] == "USD"
+        assert abs(fields["native_amount"] - 12.0 / 0.14) < 1e-6
+    finally:
+        app.dependency_overrides.clear()
+
+
+def test_mcp_currency_fields_missing_rate_falls_back_to_amount(monkeypatch) -> None:
+    """外币且拉不到汇率 → native=amount(1:1),currency_code 仍落
+    (Web 改主币种重算 / App L11 横幅可捞回,绝不丢币种)。"""
+    import asyncio
+    from src.mcp.tools import write_tools
+    from src.services.exchange_rate import fetcher as rate_fetcher
+
+    client, sm = _make_client_and_engine(monkeypatch)
+    monkeypatch.setattr(write_tools, "SessionLocal", sm)
+
+    async def boom(db, base):
+        raise RuntimeError("rate source down")
+
+    monkeypatch.setattr(rate_fetcher, "get_rates", boom)
+    try:
+        _register(client)
+        user = _fetch_user(sm, "tools@example.com")
+        fields = asyncio.run(write_tools._build_currency_fields(
+            user, ledger_base="CNY", account_currency="THB",
+            currency_arg=None, amount=500.0,
+        ))
+        assert fields["currency_code"] == "THB"
+        assert fields["native_amount"] == 500.0
+    finally:
+        app.dependency_overrides.clear()

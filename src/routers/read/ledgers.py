@@ -45,7 +45,7 @@ def list_ledgers(
         # 后 ~1ms,偶发 cold miss 50ms 可接受;list_ledgers 本身调用频率低。
         currency = ledger.currency or "CNY"
         ledger_name = _resolve_ledger_name(db, ledger=ledger)
-        tx_count, income_total, expense_total, _ = _projection_totals(db, ledger.id)
+        tx_count, income_total, expense_total, balance_all, _ = _projection_totals(db, ledger.id)
         now = datetime.now(timezone.utc)
         member_count = count_ledger_members(db, ledger_id=ledger.id)
         effective_role = role or ("owner" if ledger.user_id == current_user.id else "viewer")
@@ -58,7 +58,7 @@ def list_ledgers(
                 transaction_count=tx_count,
                 income_total=income_total,
                 expense_total=expense_total,
-                balance=income_total - expense_total,
+                balance=balance_all,
                 exported_at=now,
                 updated_at=now,
                 role=cast("Any", effective_role),
@@ -212,7 +212,7 @@ def get_ledger(
     )
     currency = ledger.currency or "CNY"
     ledger_name = _resolve_ledger_name(db, ledger=ledger)
-    tx_count, income_total, expense_total, _ = _projection_totals(db, ledger.id)
+    tx_count, income_total, expense_total, balance_all, _ = _projection_totals(db, ledger.id)
     source_change_id = _get_latest_change_id(db, ledger_id=ledger.id)
     now = datetime.now(timezone.utc)
     # 共享账本 Phase 1:member_count 从 ledger_members 表实时数。is_shared = count > 1。
@@ -226,7 +226,7 @@ def get_ledger(
         transaction_count=tx_count,
         income_total=income_total,
         expense_total=expense_total,
-        balance=income_total - expense_total,
+        balance=balance_all,
         exported_at=now,
         updated_at=now,
         source_change_id=source_change_id,
@@ -329,6 +329,8 @@ def list_transactions(
                 attachments=attachments,
                 exclude_from_stats=bool(row.exclude_from_stats),
                 exclude_from_budget=bool(row.exclude_from_budget),
+                currency_code=row.currency_code,
+                native_amount=row.native_amount,
                 last_change_id=source_change_id,
                 ledger_id=ledger.external_id,
                 ledger_name=ledger_name,
@@ -579,7 +581,11 @@ def list_budgets_usage(
 
     items: list[ReadBudgetUsageItemOut] = []
     for b in dedup.values():
-        base_q = select(func.coalesce(func.sum(ReadTxProjection.amount), 0.0)).where(
+        # 预算金额本身是账本本位币,用量必须同计量单位:
+        # 折本位币口径(0018)读 native_amount,NULL 回退 amount。
+        base_q = select(func.coalesce(func.sum(
+            func.coalesce(ReadTxProjection.native_amount, ReadTxProjection.amount)
+        ), 0.0)).where(
             ReadTxProjection.ledger_id == ledger.id,
             ReadTxProjection.tx_type == "expense",
             ReadTxProjection.happened_at >= start,

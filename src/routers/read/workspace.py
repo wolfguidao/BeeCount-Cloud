@@ -206,6 +206,8 @@ def list_workspace_transactions(
                 attachments=attachments,
                 exclude_from_stats=bool(row.exclude_from_stats),
                 exclude_from_budget=bool(row.exclude_from_budget),
+                currency_code=row.currency_code,
+                native_amount=row.native_amount,
                 last_change_id=change_id,
                 ledger_id=led_ext_id,
                 ledger_name=led_name,
@@ -242,16 +244,16 @@ def list_workspace_transactions(
 
 
 _CSV_HEADERS_BY_LANG: dict[str, list[str]] = {
-    # 跟 mobile lib/pages/data/export_page.dart 的 11 列严格对齐:
-    # Type, Category, SubCategory, Amount, Account, FromAccount,
+    # 跟 mobile lib/pages/data/export_page.dart 的 12 列严格对齐(v30 加币种):
+    # Type, Category, SubCategory, Amount, Currency, Account, FromAccount,
     # ToAccount, Note, Time, Tags, Attachments
-    "zh-CN": ["类型", "分类", "二级分类", "金额", "账户", "转出账户",
+    "zh-CN": ["类型", "分类", "二级分类", "金额", "币种", "账户", "转出账户",
               "转入账户", "备注", "时间", "标签", "附件"],
-    "zh-TW": ["類型", "分類", "二級分類", "金額", "帳戶", "轉出帳戶",
+    "zh-TW": ["類型", "分類", "二級分類", "金額", "幣種", "帳戶", "轉出帳戶",
               "轉入帳戶", "備註", "時間", "標籤", "附件"],
-    "en":    ["Type", "Category", "Subcategory", "Amount", "Account",
-              "From Account", "To Account", "Note", "Time", "Tags",
-              "Attachments"],
+    "en":    ["Type", "Category", "Subcategory", "Amount", "Currency",
+              "Account", "From Account", "To Account", "Note", "Time",
+              "Tags", "Attachments"],
 }
 
 _TX_TYPE_LABELS_BY_LANG: dict[str, dict[str, str]] = {
@@ -339,6 +341,8 @@ def export_workspace_transactions_csv(
     else:
         ledger_internal_ids = []
         primary_name = "ledger"
+    # v30 多币种:currency_code NULL 的历史行按其账本本位币兜底(导出自包含)
+    ledger_currency_by_id = {l.id: (l.currency or "CNY") for l in ledgers}
 
     # LEFT JOIN UserCategoryProjection 拿 level + parent_name,做 parent/sub 列拆分。
     # category 是 user-global,按 user_id 而非 ledger_id JOIN。
@@ -456,11 +460,20 @@ def export_workspace_transactions_csv(
                 f"  {local_dt.strftime('%Y-%m-%d %H:%M:%S')}  "
             )
 
+            # v30 多币种:currency_code 为 NULL 的历史行按账本本位币兜底
+            # (与统计读取端同语义,导出自包含可回导)
+            currency_col = (
+                tx.currency_code
+                or ledger_currency_by_id.get(tx.ledger_id)
+                or "CNY"
+            ).upper()
+
             yield ",".join([
                 _csv_field(type_label),
                 _csv_field(category_col),
                 _csv_field(sub_category_col),
                 f"{tx.amount:.2f}" if tx.amount is not None else "",
+                _csv_field(currency_col),
                 _csv_field(tx.account_name) if not is_transfer else "",
                 _csv_field(tx.from_account_name) if is_transfer else "",
                 _csv_field(tx.to_account_name) if is_transfer else "",
@@ -845,13 +858,19 @@ def list_workspace_tags(
         for e in all_tags
         if e.name and e.id
     }
+    # 账本维度口径:折本位币(native ?? amount)+ 排除「不计收支」标记笔,
+    # 与 analytics / _projection_totals / App getTagStats 一致(审查发现:
+    # 此前此处两个口径都缺,多币种/标记场景下标签合计与分析页对不上)。
     tx_rows = db.execute(
         select(
             ReadTxProjection.tx_type,
-            ReadTxProjection.amount,
+            func.coalesce(ReadTxProjection.native_amount, ReadTxProjection.amount),
             ReadTxProjection.tag_sync_ids_json,
             ReadTxProjection.tags_csv,
-        ).where(ReadTxProjection.ledger_id.in_(ledger_internal_ids))
+        ).where(
+            ReadTxProjection.ledger_id.in_(ledger_internal_ids),
+            ReadTxProjection.exclude_from_stats == sa_false(),
+        )
     ).all()
     for tx_type_val, amount, tag_ids_json, tags_csv in tx_rows:
         matched_ids: set[str] = set()
@@ -992,7 +1011,8 @@ def workspace_analytics(
     if ledger_internal_ids:
         tx_query = select(
             ReadTxProjection.tx_type,
-            ReadTxProjection.amount,
+            # 账本维度折本位币口径(0018):native_amount ?? amount。
+            func.coalesce(ReadTxProjection.native_amount, ReadTxProjection.amount),
             ReadTxProjection.happened_at,
             ReadTxProjection.category_name,
         ).where(
